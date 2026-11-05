@@ -18,5 +18,15 @@
     "package.json",
     "engine.json"
   ],
-  "userFiles": ["radar.config.json", "reports/", "data/", "renovate.json", "README.md", "AGENTS.md", "CLAUDE.md", "handoff-rules.md"]
+  "userFiles": [
+    "radar.config.json",
+    "reports/",
+    "data/",
+    "renovate.json",
+    "README.md",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "handoff-rules.md",
+    "docs/local/"
+  ]
 }

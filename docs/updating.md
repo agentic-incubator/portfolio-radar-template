@@ -7,7 +7,7 @@ Your private copy was made from `agentic-incubator/portfolio-radar-template`. Ne
 | List | Who owns it | On update |
 |---|---|---|
 | `engineFiles` | The template | Replaced with the new version |
-| `userFiles` | You | Never touched |
+| `userFiles` | You | Never touched. Keep your own notes in `docs/local/`, which is listed here |
 
 ## With the plugin
 
