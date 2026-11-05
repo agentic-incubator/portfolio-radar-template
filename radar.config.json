@@ -1,0 +1,16 @@
+{
+  "owner": "",
+  "includePrivate": true,
+  "staleDays": 90,
+  "lookbackHours": 24,
+  "maxPrsListed": 10,
+  "goalRepos": {},
+  "ignoreRepos": [],
+  "noise": {
+    "archived": true,
+    "forks": true
+  },
+  "activeForks": [],
+  "owners": [],
+  "clientOwners": []
+}

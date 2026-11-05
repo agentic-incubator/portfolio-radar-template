@@ -1,0 +1,10 @@
+{
+  "name": "portfolio-radar",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "radar": "node scripts/radar.mjs",
+    "test": "node --check scripts/radar.mjs && node --test test/*.test.mjs"
+  }
+}
