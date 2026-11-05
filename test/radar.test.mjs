@@ -1,6 +1,7 @@
 // Unit tests for the pure parts of the radar: analyse() and render(). No network.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { analyse, render, envName, updaterOf, detectUpdaters, kindOf, checksState, noiseOf, dashboard, priorityOf, plural, gapLines, PROJECTS_QUERY } from "../scripts/radar.mjs";
 
 const iso = (daysAgo) => new Date(Date.now() - daysAgo * 86400e3).toISOString();
@@ -243,9 +244,13 @@ test("headline counts read naturally for one and many", () => {
   assert.match(md, /0 open PRs, 0 open issues/);
 });
 
-test("an empty goals section says so instead of staying blank", () => {
+test("the goals section is never blank: it says no goals are set, or lists each goal", () => {
   const md = render([repo()], analyse([repo()], null), []);
-  assert.match(md, /## 5\. Toward your goals\n\n- No goals set\./);
+  const goals = Object.keys(JSON.parse(readFileSync(new URL("../radar.config.json", import.meta.url), "utf8")).goalRepos ?? {});
+  const section = md.split("## 5. Toward your goals\n\n")[1]?.split("\n## ")[0] ?? "";
+  assert.match(section, /^- /, "section 5 has at least one line");
+  if (!goals.length) assert.match(section, /^- No goals set\./);
+  else for (const g of goals) assert.ok(section.includes(g), `goal "${g}" is listed`);
 });
 
 test("Couldn't check names the repos and says why, instead of 'some repos'", () => {
