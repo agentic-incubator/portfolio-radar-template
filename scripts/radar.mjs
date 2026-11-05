@@ -32,6 +32,25 @@ const now = new Date();
 const today = now.toISOString().slice(0, 10);
 const since = new Date(now.getTime() - cfg.lookbackHours * 3600e3);
 const warnings = new Set();
+// Per-repo gaps, so "Couldn't check" can name the repos instead of saying "some repos".
+const gaps = { unreadable: new Set(), dependabot: new Set(), codeScanning: new Set(), secretScanning: new Set() };
+export const plural = (n, word, many = `${word}s`) => `${n} ${n === 1 ? word : many}`;
+const GAP_TEXT = {
+  unreadable: ["couldn't be read at all, so their rows show nothing", "Usually the app isn't installed on them, or lacks Contents: read."],
+  dependabot: ["Dependabot alerts not readable", "Usually Dependabot alerts are off for them; otherwise the app lacks Dependabot alerts: read."],
+  codeScanning: ["code scanning not readable", "Usually code scanning isn't set up (private repos need GitHub Advanced Security); otherwise the app lacks Code scanning alerts: read."],
+  secretScanning: ["secret scanning not readable", "Usually secret scanning is off (private repos need GitHub Advanced Security); otherwise the app lacks Secret scanning alerts: read."],
+};
+export function gapLines(g, max = 8) {
+  return Object.entries(GAP_TEXT).filter(([k]) => g[k]?.size).map(([k, [what, why]]) => {
+    const names = [...g[k]].sort();
+    const list = names.slice(0, max).join(", ") + (names.length > max ? ` and ${names.length - max} more` : "");
+    return k === "unreadable" ? `${plural(names.length, "repo")} ${what}: ${list}. ${why}` : `${what[0].toUpperCase()}${what.slice(1)} for ${plural(names.length, "repo")}: ${list}. ${why}`;
+  });
+}
+
+// repositoryOwner works for a user or an org login, so a team whose owner is its org reads fine.
+export const PROJECTS_QUERY = `query($login:String!){ repositoryOwner(login:$login){ ... on ProjectV2Owner { projectsV2(first:30, orderBy:{field:UPDATED_AT,direction:DESC}){ nodes{ title url closed updatedAt items(first:100){ totalCount nodes{ fieldValueByName(name:"Status"){ ... on ProjectV2ItemFieldSingleSelectValue{ name } } } } } } } } }`;
 const OWNERS = [...(cfg.owners ?? [cfg.owner]), ...(cfg.clientOwners ?? [])];
 
 // ---------- API ----------
@@ -159,9 +178,9 @@ async function listRepos() {
         warnings.add(`Not checked: ${o}. ${APP ? "The GitHub App isn't installed there yet (see docs/setup.md)." : `No token for it (${envName(o)}).`}`);
         continue;
       }
-      const path = APP
-        ? `/installation/repositories`
-        : o.toLowerCase() === cfg.owner.toLowerCase() ? `/user/repos?affiliation=owner&visibility=all` : `/orgs/${o}/repos?type=all`;
+      // By account type, not by name: a team radar can use its org as `owner`.
+      const isOrg = !APP && (await api(`/users/${o}`, { optional: true, owner: o }))?.type === "Organization";
+      const path = APP ? `/installation/repositories` : isOrg ? `/orgs/${o}/repos?type=all` : `/user/repos?affiliation=owner&visibility=all`;
       let got;
       try { got = await paged(path, 2000, o); } catch (e) { got = undefined; }
       if (got === undefined) warnings.add(`Couldn't list repos for ${o}: GitHub refused the token.`);
@@ -227,10 +246,10 @@ async function collect(r) {
     r.fork ? api(`/repos/${full}`, { optional: true }) : null, // the list endpoints don't name a fork's parent
   ]);
   const readable = pulls !== undefined;
-  if (!readable) warnings.add("Some repos could not be read at all (token lacks access); their rows show nothing.");
-  if (dependabot === undefined) warnings.add("Some repos' Dependabot alerts weren't readable (alerts off or token lacks Dependabot alerts: read).");
-  if (codeScan === undefined) warnings.add("Some repos have code scanning off, or the token lacks Code scanning alerts: read.");
-  if (secretScan === undefined) warnings.add("Some repos have secret scanning off, or the token lacks Secret scanning alerts: read.");
+  if (!readable) gaps.unreadable.add(full);
+  if (dependabot === undefined) gaps.dependabot.add(full);
+  if (codeScan === undefined) gaps.codeScanning.add(full);
+  if (secretScan === undefined) gaps.secretScanning.add(full);
 
   // Latest completed run per workflow on the default branch
   const latestByWf = new Map();
@@ -288,10 +307,9 @@ async function projects() {
   const out = [];
   for (const o of cfg.owners ?? []) {
     if (!tokenFor(o) && !USE_GH) continue;
-    const kind = o.toLowerCase() === cfg.owner.toLowerCase() ? "user" : "organization";
-    const data = await graphql(`query($login:String!){ ${kind}(login:$login){ projectsV2(first:30, orderBy:{field:UPDATED_AT,direction:DESC}){ nodes{ title url closed updatedAt items(first:100){ totalCount nodes{ fieldValueByName(name:"Status"){ ... on ProjectV2ItemFieldSingleSelectValue{ name } } } } } } } }`, { login: o }, o);
-    const node = data?.[kind];
-    if (!node) continue;
+    const data = await graphql(PROJECTS_QUERY, { login: o }, o);
+    const node = data?.repositoryOwner;
+    if (!node?.projectsV2) continue;
     for (const p of node.projectsV2.nodes.filter((p) => !p.closed)) {
       const counts = {};
       for (const it of p.items.nodes) { const st = it.fieldValueByName?.name ?? "No status"; counts[st] = (counts[st] ?? 0) + 1; }
@@ -528,7 +546,7 @@ export function render(repos, a, proj) {
   };
   L.push(`# Portfolio radar: ${today}`, "");
   const noisy = a.noise ?? [];
-  L.push(`${repos.length} active repos (${repos.filter((r) => r.private).length} private). ${totals.prs} open PRs, ${totals.issues} open issues, ${totals.alerts} open security alerts, ${totals.failing} repos with CI failing on their default branch.${noisy.length ? ` Plus ${noisy.length} archived or forked repos still making noise (section 6).` : ""}`, "");
+  L.push(`${plural(repos.length, "active repo")} (${repos.filter((r) => r.private).length} private). ${plural(totals.prs, "open PR")}, ${plural(totals.issues, "open issue")}, ${plural(totals.alerts, "open security alert")}, ${plural(totals.failing, "repo")} with CI failing on the default branch.${noisy.length ? ` Plus ${noisy.length} archived or forked repos still making noise (section 6).` : ""}`, "");
   L.push("## 1. Needs you today", "");
   L.push(...(a.needs.length ? a.needs.slice(0, 25).map((n) => `- ${n.text}`) : ["- Nothing urgent."]));
   if (a.needs.length > 25) L.push(`- …and ${a.needs.length - 25} more in data/latest.json.`);
@@ -538,7 +556,7 @@ export function render(repos, a, proj) {
   L.push(`- No push in ${cfg.staleDays}+ days (${a.drift.stale.length}): ${a.drift.stale.join(", ") || "none"}`);
   L.push(`- Bot PRs piling up (3+), ready to fold into one branch or let automerge take: ${a.drift.botPrPiles.join("; ") || "none"}`);
   const u = a.drift.updaters;
-  L.push(`- Dependency updates: ${u.renovate.length} repos on Renovate, ${u.dependabot.length} on Dependabot, ${u.both.length} on both, ${u.none.length} on neither`);
+  L.push(`- Dependency updates: ${plural(u.renovate.length, "repo")} on Renovate, ${u.dependabot.length} on Dependabot, ${u.both.length} on both, ${u.none.length} on neither`);
   if (u.both.length) L.push(`  - Both Renovate and Dependabot (duplicate PRs likely; keep one, or keep Dependabot for security updates only): ${u.both.join(", ")}`);
   if (u.none.length) L.push(`  - No dependency updater: ${u.none.join(", ")}`);
   L.push(`- PRs quiet for 30+ days: ${a.drift.oldPrs.join(", ") || "none"}`);
@@ -546,7 +564,7 @@ export function render(repos, a, proj) {
   L.push("", "## 4. Patterns across repos", "");
   L.push(...(a.patterns.length ? a.patterns.map((p) => `- ${p}`) : ["- None today."]));
   L.push("", "## 5. Toward your goals", "");
-  L.push(...a.goals.map((g) => `- ${g}`));
+  L.push(...(a.goals.length ? a.goals.map((g) => `- ${g}`) : ["- No goals set. Add them under goalRepos in radar.config.json to track repos toward a deadline."]));
   L.push("", "## 6. Noise: archived and forked repos", "");
   if (!noisy.length) L.push("- None: no archived or forked repo is raising alerts or bot PRs.");
   for (const n of noisy) {
@@ -586,6 +604,7 @@ for (let i = 0; i < repos.length; i += 6) {
     return null;
   })))).filter(Boolean));
 }
+for (const line of gapLines(gaps)) warnings.add(line);
 const proj = await projects();
 const active = collected.filter((r) => r.kind === "active");
 const noise = collected.filter((r) => r.kind !== "active");

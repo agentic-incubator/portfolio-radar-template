@@ -56,7 +56,7 @@ Fine-grained personal tokens cover one owner each, expire (a year at most), and 
 | Mode | How to run | Repo listing | Notes |
 |---|---|---|---|
 | App (Actions) | `RADAR_APP_ID` + `RADAR_APP_PRIVATE_KEY` | `/installation/repositories` | The normal daily run. Works locally too |
-| Token (local) | `RADAR_TOKEN=…` (optionally `RADAR_TOKEN_<OWNER>`) | `/user/repos` for `owner`, `/orgs/{o}/repos` for orgs | Any read-only PAT |
+| Token (local) | `RADAR_TOKEN=…` (optionally `RADAR_TOKEN_<OWNER>`) | `/user/repos` for a personal account, `/orgs/{o}/repos` for an org (decided by account type) | Any read-only PAT |
 | gh CLI (local) | `RADAR_USE_GH=1` | `gh api search/repositories` | Uses your gh login. No GitHub Projects (GraphQL is skipped) |
 
 `RADAR_LIMIT=N` checks only the first N repos, handy for a quick local test. Local runs write to `reports/` and `data/` too, so don't commit them by accident.
@@ -65,7 +65,7 @@ Fine-grained personal tokens cover one owner each, expire (a year at most), and 
 
 | Key | Meaning |
 |---|---|
-| `owner` | Your personal account. Its repos show by name alone; others show as `owner/name` |
+| `owner` | The main account: your personal login, or for a team radar the team's org. Its repos show by name alone; others show as `owner/name`. It must also be in `owners` |
 | `owners` | Accounts and orgs you run |
 | `clientOwners` | Client orgs. Checked the same way, marked as client work |
 | `includePrivate` | Include private repos |

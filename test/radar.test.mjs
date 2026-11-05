@@ -1,7 +1,7 @@
 // Unit tests for the pure parts of the radar: analyse() and render(). No network.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { analyse, render, envName, updaterOf, detectUpdaters, kindOf, checksState, noiseOf, dashboard, priorityOf } from "../scripts/radar.mjs";
+import { analyse, render, envName, updaterOf, detectUpdaters, kindOf, checksState, noiseOf, dashboard, priorityOf, plural, gapLines, PROJECTS_QUERY } from "../scripts/radar.mjs";
 
 const iso = (daysAgo) => new Date(Date.now() - daysAgo * 86400e3).toISOString();
 const repo = (over = {}) => ({
@@ -122,7 +122,7 @@ test("updater drift: split bot piles, flag both and none", () => {
   assert.deepEqual(a.drift.botPrPiles, ["r1 (renovate 2, dependabot 1, [dashboard](d))"]);
   assert.deepEqual(a.drift.updaters, { renovate: ["r2"], dependabot: [], both: ["r1"], none: ["r3"] });
   const md = render([], a, []);
-  assert.match(md, /1 repos on Renovate, 0 on Dependabot, 1 on both, 1 on neither/);
+  assert.match(md, /1 repo on Renovate, 0 on Dependabot, 1 on both, 1 on neither/);
 });
 
 test("paged keeps the owner's token when next links use /repositories/<id>", async () => {
@@ -233,4 +233,32 @@ test("dashboard carries history forward, one row per day, and marks fresh repos"
   assert.equal(d.totals.failing, 1);
   const seeded = dashboard(repos, a, { seed: { generated: "2026-11-01T00:00:00Z", repos: [repo(), repo()] } });
   assert.deepEqual(seeded.history.map((h) => [h.date, h.repos]), [["2026-11-01", 2], [new Date().toISOString().slice(0, 10), 1]]);
+});
+
+test("headline counts read naturally for one and many", () => {
+  assert.equal(plural(1, "repo"), "1 repo");
+  assert.equal(plural(2, "repo"), "2 repos");
+  const md = render([repo()], analyse([repo()], null), []);
+  assert.match(md, /^1 active repo \(/m);
+  assert.match(md, /0 open PRs, 0 open issues/);
+});
+
+test("an empty goals section says so instead of staying blank", () => {
+  const md = render([repo()], analyse([repo()], null), []);
+  assert.match(md, /## 5\. Toward your goals\n\n- No goals set\./);
+});
+
+test("Couldn't check names the repos and says why, instead of 'some repos'", () => {
+  const lines = gapLines({ unreadable: new Set(), dependabot: new Set(["o/b", "o/a"]), codeScanning: new Set(["o/a"]), secretScanning: new Set() });
+  assert.equal(lines.length, 2);
+  assert.match(lines[0], /^Dependabot alerts not readable for 2 repos: o\/a, o\/b\. Usually/);
+  assert.match(lines[1], /^Code scanning not readable for 1 repo: o\/a\..*Advanced Security/);
+  const many = gapLines({ secretScanning: new Set(Array.from({ length: 10 }, (_, i) => `o/r${i}`)) }, 3);
+  assert.match(many[0], /o\/r0, o\/r1, o\/r2 and 7 more\./);
+  assert.ok(!lines.join(" ").includes("Some repos"));
+});
+
+test("Projects are read through repositoryOwner, so an org as owner works", () => {
+  assert.match(PROJECTS_QUERY, /repositoryOwner\(login:\$login\)\{ \.\.\. on ProjectV2Owner/);
+  assert.doesNotMatch(PROJECTS_QUERY, /\buser\(login|organization\(login/);
 });

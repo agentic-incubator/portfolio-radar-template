@@ -1,6 +1,6 @@
 {
   "name": "portfolio-radar-template",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "upstream": "agentic-incubator/portfolio-radar-template",
   "engineFiles": [
     "scripts/radar.mjs",

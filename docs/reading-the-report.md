@@ -61,5 +61,5 @@ Open org Projects, with item counts by Status and when each was last updated.
 Anything the radar couldn't read, and why. Typical entries:
 
 - *Not checked: <owner>. The GitHub App isn't installed there yet.* Install it (see [Setup](setup.md)).
-- *Some repos have code scanning off.* Expected for repos without CodeQL. Switch it on in the repo's Security settings if you want it.
+- *Code scanning (or secret scanning, or Dependabot alerts) not readable for N repos: …* The repos are named. Usually the feature is simply off: code and secret scanning on private repos need GitHub Advanced Security. Switch it on in the repo's Security settings if you want it. If it's on, the app is missing that read permission.
 - *GitHub Projects not read for <owner>.* The app needs Organization → Projects: read, or the org hasn't approved the updated permissions.
