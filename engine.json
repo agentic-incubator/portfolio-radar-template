@@ -1,0 +1,22 @@
+{
+  "name": "portfolio-radar-template",
+  "version": "0.1.0",
+  "upstream": "agentic-incubator/portfolio-radar-template",
+  "engineFiles": [
+    "scripts/radar.mjs",
+    "scripts/installs.mjs",
+    "scripts/add-owner.sh",
+    "test/radar.test.mjs",
+    ".github/workflows/daily-radar.yml",
+    ".github/workflows/ci.yml",
+    "docs/overview.md",
+    "docs/how-it-works.md",
+    "docs/reading-the-report.md",
+    "docs/setup.md",
+    "docs/dashboard.md",
+    "docs/updating.md",
+    "package.json",
+    "engine.json"
+  ],
+  "userFiles": ["radar.config.json", "reports/", "data/", "renovate.json", "README.md", "AGENTS.md", "CLAUDE.md", "handoff-rules.md"]
+}
