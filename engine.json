@@ -1,6 +1,6 @@
 {
   "name": "portfolio-radar-template",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "upstream": "agentic-incubator/portfolio-radar-template",
   "engineFiles": [
     "scripts/radar.mjs",
@@ -15,6 +15,7 @@
     "docs/setup.md",
     "docs/dashboard.md",
     "docs/updating.md",
+    "docs/cleanup.md",
     "package.json",
     "engine.json"
   ],
@@ -27,6 +28,7 @@
     "AGENTS.md",
     "CLAUDE.md",
     "handoff-rules.md",
-    "docs/local/"
+    "docs/local/",
+    ".claude/"
   ]
 }

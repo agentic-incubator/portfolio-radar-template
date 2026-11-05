@@ -34,6 +34,7 @@ By hand: click **Use this template → Create a new repository**, choose **Priva
 | [Reading the report](docs/reading-the-report.md) | Each section and what to do |
 | [The dashboard](docs/dashboard.md) | The page and its buttons |
 | [Updating](docs/updating.md) | Getting new engine versions into your copy |
+| [Cleaning up branches](docs/cleanup.md) | Optional: remove merged branches on GitHub and in your clone |
 
 ## License
 
