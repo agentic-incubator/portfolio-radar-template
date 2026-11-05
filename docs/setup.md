@@ -94,6 +94,8 @@ Before that, you can check the installs from your clone: `RADAR_APP_ID=<App ID> 
 
 Then open `reports/latest.md`. Check the "Couldn't check" section: each owner the app isn't installed on is listed there. After this, it runs daily on its own.
 
+Optional: to have merged branches cleaned up on GitHub or in your clone, see [Cleaning up branches](cleanup.md).
+
 ## Adding an owner later
 
 No secrets and no workflow changes: the radar finds every installation of the app at run time.
