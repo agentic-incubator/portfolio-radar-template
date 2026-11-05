@@ -8,6 +8,7 @@ A mission-control page that redraws this radar's findings every morning and puts
 - **Vitals** with a sparkline each, from the 60 days of totals in `data/dashboard.json`.
 - **Today's moves**, then lanes: Needs you, Ready to ship, One fix many repos, Dependency bots, Goals, Clients, Noise, Drift, In flight, and Couldn't check.
 - **Filters** by owner, and Clients for repos in `clientOwners` orgs.
+- **Footer** with the credit line, the plugin version and the engine version (`engine` in `data/dashboard.json`). An engine older than 0.4.0 doesn't report one, and the footer says so.
 
 ## Three ways to run it
 
