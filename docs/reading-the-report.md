@@ -63,3 +63,7 @@ Anything the radar couldn't read, and why. Typical entries:
 - *Not checked: <owner>. The GitHub App isn't installed there yet.* Install it (see [Setup](setup.md)).
 - *Code scanning (or secret scanning, or Dependabot alerts) not readable for N repos: …* The repos are named. Usually the feature is simply off: code and secret scanning on private repos need GitHub Advanced Security. Switch it on in the repo's Security settings if you want it. If it's on, the app is missing that read permission.
 - *GitHub Projects not read for <owner>.* The app needs Organization → Projects: read, or the org hasn't approved the updated permissions.
+
+## Footer
+
+The last lines name the engine version that wrote the report (from `engine.json`) and the credit line. `data/dashboard.json` carries the same version as `engine`, and the dashboard shows it in its footer next to the plugin version. If the version can't be read, it's left out rather than guessed.

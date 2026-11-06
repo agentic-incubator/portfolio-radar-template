@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { analyse, render, envName, updaterOf, detectUpdaters, kindOf, checksState, noiseOf, dashboard, priorityOf, plural, gapLines, PROJECTS_QUERY } from "../scripts/radar.mjs";
+import { analyse, render, envName, updaterOf, detectUpdaters, kindOf, checksState, noiseOf, dashboard, priorityOf, plural, gapLines, PROJECTS_QUERY, ENGINE_VERSION } from "../scripts/radar.mjs";
 
 const iso = (daysAgo) => new Date(Date.now() - daysAgo * 86400e3).toISOString();
 const repo = (over = {}) => ({
@@ -266,4 +266,13 @@ test("Couldn't check names the repos and says why, instead of 'some repos'", () 
 test("Projects are read through repositoryOwner, so an org as owner works", () => {
   assert.match(PROJECTS_QUERY, /repositoryOwner\(login:\$login\)\{ \.\.\. on ProjectV2Owner/);
   assert.doesNotMatch(PROJECTS_QUERY, /\buser\(login|organization\(login/);
+});
+
+test("report and dashboard carry the engine version from engine.json, and the credit line", () => {
+  const v = JSON.parse(readFileSync(new URL("../engine.json", import.meta.url), "utf8")).version;
+  assert.equal(ENGINE_VERSION, v);
+  const md = render([repo()], analyse([repo()], null), []);
+  assert.ok(md.includes(`portfolio-radar engine v${v}.`));
+  assert.match(md, /Built with ❤️ by Chris Phillipson, Principal, CP Ventures Group, LLC/);
+  assert.equal(dashboard([repo()], analyse([repo()], null), { generated: "2026-11-05T00:00:00Z" }).engine, v);
 });
