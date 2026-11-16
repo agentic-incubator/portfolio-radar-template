@@ -33,7 +33,7 @@ Its output is plain files, so other tools and agents can read it: `reports/lates
 
 ## What the report covers
 
-For each repo: open PRs (human and bot), open issues, the latest CI run of each workflow on the default branch, Dependabot alerts, code-scanning alerts, secret-scanning alerts, the latest release, last push, whether it has an `AGENTS.md`, and which dependency updater it uses (Renovate, Dependabot, both or neither). For each org: open GitHub Projects and their item counts by status.
+For each repo: open PRs (human and bot), open issues, the latest CI run of each workflow on the default branch, Dependabot alerts, code-scanning alerts, secret-scanning alerts, the latest release, last push, whether it has an `AGENTS.md`, and which dependency updater it uses (Renovate, Dependabot, both or neither). For each active repo it also keeps metrics: created date, last commit, stars, forks (active and all), open issues, PRs closed and merged, lines of code, and downloads for the last day, week, month and six months. For each org: open GitHub Projects and their item counts by status.
 
 It ranks all of that into five sections: needs you today, changed in the last 24 hours, drift, patterns across repos, and progress toward goals. A sixth section, noise, holds archived repos and forks that still raise alerts or bot PRs, with ways to silence, remove or fix each. See [Reading the report](reading-the-report.md).
 

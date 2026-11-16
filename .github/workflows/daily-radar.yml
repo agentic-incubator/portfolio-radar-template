@@ -18,7 +18,7 @@ jobs:
     # The public template has no owners or secrets, so it never runs there. Your private copy runs daily.
     if: github.repository != 'agentic-incubator/portfolio-radar-template'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45 # the weekly metrics run clones each repo and queues PR searches
     steps:
       - uses: actions/checkout@v7
 

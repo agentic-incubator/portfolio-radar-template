@@ -23,11 +23,11 @@ On github.com: **Settings → Developer settings → GitHub Apps → New GitHub 
 |---|---|
 | Actions | CI runs on the default branch |
 | Code scanning alerts | Code-scanning alerts |
-| Contents | Latest release, `AGENTS.md` check |
+| Contents | Releases and download counts, `AGENTS.md` check, package manifests, the weekly shallow clone for lines of code |
 | Dependabot alerts | Dependabot alerts |
 | Issues | Open issues |
-| Metadata | Mandatory; repo list, visibility, push date |
-| Pull requests | Open PRs |
+| Metadata | Mandatory; repo list, visibility, push date, created date, stars, forks |
+| Pull requests | Open PRs, closed and merged PR counts |
 | Secret scanning alerts | Exposed secrets |
 
 **Organization permissions:**
