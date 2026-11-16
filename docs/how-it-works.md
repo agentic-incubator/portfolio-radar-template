@@ -46,7 +46,7 @@ Per active repo, stored as `metrics` in `data/latest.json` and shown in section 
 | `prsClosed` | Every PR ever closed, merged or not | The `rel="last"` page of `/repos/{r}/pulls?state=closed&per_page=1` | Daily |
 | `prsMerged` | Every PR ever merged | Search `repo:{r} is:pr is:merged` (30 searches a minute, so they queue about 2 seconds apart) | Weekly |
 | `forks.total` / `forks.active` | All direct forks / forks whose owner pushed after forking, last push within `metrics.activeForkMonths` months | Repo record / `/repos/{r}/forks` (only when there are forks) | Daily / weekly |
-| `loc` | Non-blank lines in tracked source files, total and by language | A shallow clone of the default branch into a temp folder, removed afterwards | Weekly |
+| `loc` | Non-blank lines in tracked source files, total and by language. Off unless `metrics.loc` is `true`; otherwise `null` with no gap line | A shallow clone of the default branch into a temp folder, removed afterwards | Weekly |
 | `downloads` | Release file downloads plus package downloads, for the last 1, 7, 30 and 182 days (`d1`, `d7`, `d30`, `d182`) | See below | Daily |
 
 Weekly fields refresh on `metrics.weekday` (UTC, 1 = Monday), on the first run, or when you run with `RADAR_WEEKLY=1`. In between they're carried forward from the last snapshot, and `weeklyAt` says when they were measured.
@@ -112,4 +112,4 @@ Fine-grained personal tokens cover one owner each, expire (a year at most), and 
 | `ignoreRepos` | Repo names to skip |
 | `noise` | `{ "archived": true, "forks": true }`: include archived repos and forks as noise. `false` leaves that kind out |
 | `activeForks` | Forks that are really your own work (`name` or `owner/name`): reported as active repos |
-| `metrics` | Optional. `enabled` (default `true`), `weekday` for the weekly fields (UTC, 0 = Sunday, default `1`), `activeForkMonths` (default `6`), `loc` (default `true`; `false` skips the weekly clones), `packages` (repo `name` or `owner/name` → list such as `["npm:@scope/pkg", "crates:name", "pypi:name", "dockerhub:ns/repo"]`, counted without the link-back check), `ignorePackages` (ids to leave out). See [Metrics](#metrics) |
+| `metrics` | Optional. `enabled` (default `true`), `weekday` for the weekly fields (UTC, 0 = Sunday, default `1`), `activeForkMonths` (default `6`), `loc` (default `false`; `true` counts lines of code with a weekly shallow clone of each repo, about 10 to 15 Actions minutes for 120 repos), `packages` (repo `name` or `owner/name` → list such as `["npm:@scope/pkg", "crates:name", "pypi:name", "dockerhub:ns/repo"]`, counted without the link-back check), `ignorePackages` (ids to leave out). See [Metrics](#metrics) |

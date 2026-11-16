@@ -354,8 +354,9 @@ export function checksState(runs) {
 // Per-repo numbers for a portfolio index: created, last commit, stars, forks, open issues, PRs closed, lines of
 // code and downloads. Cheap fields are read every day; forks, merged PRs, lines of code and package discovery
 // once a week (metrics.weekday, UTC, 1 = Monday), and carried forward from the last snapshot between runs.
-// Anything that couldn't be read is null and named under "Couldn't check", never 0. See docs/how-it-works.md.
-const METRICS = { enabled: true, weekday: 1, activeForkMonths: 6, loc: true, packages: {}, ignorePackages: [], ...(cfg.metrics ?? {}) };
+// Anything that couldn't be read is null and named under "Couldn't check", never 0. Lines of code (a weekly shallow
+// clone of every repo) is off unless metrics.loc is true. See docs/how-it-works.md.
+const METRICS = { enabled: true, weekday: 1, activeForkMonths: 6, loc: false, packages: {}, ignorePackages: [], ...(cfg.metrics ?? {}) };
 const metricGaps = { lastCommit: new Set(), prsClosed: new Set(), prsMerged: new Set(), forks: new Set(), loc: new Set(), downloads: new Set() };
 const METRIC_GAP_TEXT = { lastCommit: "last commit", prsClosed: "closed PR count", prsMerged: "merged PR count", forks: "active forks", loc: "lines of code", downloads: "some download counts" };
 export function metricGapLines(g, max = 8) {
@@ -952,11 +953,13 @@ export function metricsSection(repos) {
   const rows = repos.filter((r) => r.metrics).sort((a, b) => (b.metrics.stars ?? -1) - (a.metrics.stars ?? -1) || a.name.localeCompare(b.name));
   if (!rows.length) return [];
   const weekly = rows.map((r) => r.metrics.weeklyAt).filter(Boolean).sort().at(-1);
-  const L = ["", "## 7. Repo metrics", "", `Forks, merged PRs and lines of code measured weekly${weekly ? ` (last ${weekly})` : ""}; the rest daily. Downloads are release files plus npm, crates.io, PyPI and Docker Hub packages that point back to the repo. "since <date>" means the window isn't full yet; "?" means it couldn't be read; "-" means nothing to download.`, ""];
-  L.push("| Repo | Created | Last commit | Stars | Forks (active/all) | Open issues | PRs closed (merged) | Lines of code | DL 24h | DL 7d | DL 30d | DL 6mo |", "|---|---|---|---|---|---|---|---|---|---|---|---|");
+  // Lines of code is opt-in: with it off and nothing counted before, the column is left out rather than all "?".
+  const showLoc = METRICS.loc || rows.some((r) => r.metrics.loc);
+  const L = ["", "## 7. Repo metrics", "", `Forks, merged PRs${showLoc ? " and lines of code" : ""} measured weekly${weekly ? ` (last ${weekly})` : ""}; the rest daily. Downloads are release files plus npm, crates.io, PyPI and Docker Hub packages that point back to the repo. "since <date>" means the window isn't full yet; "?" means it couldn't be read; "-" means nothing to download.`, ""];
+  L.push(`| Repo | Created | Last commit | Stars | Forks (active/all) | Open issues | PRs closed (merged) |${showLoc ? " Lines of code |" : ""} DL 24h | DL 7d | DL 30d | DL 6mo |`, `|---|---|---|---|---|---|---|${showLoc ? "---|" : ""}---|---|---|---|`);
   for (const r of rows) {
     const m = r.metrics;
-    L.push(`| ${r.name} | ${m.created?.slice(0, 10) ?? "?"} | ${m.lastCommit?.slice(0, 10) ?? "?"} | ${fmt(m.stars)} | ${fmt(m.forks?.active)}/${fmt(m.forks?.total)} | ${fmt(m.openIssues)} | ${fmt(m.prsClosed)} (${fmt(m.prsMerged)}) | ${fmt(m.loc?.total)} | ${dlCell(m, "d1")} | ${dlCell(m, "d7")} | ${dlCell(m, "d30")} | ${dlCell(m, "d182")} |`);
+    L.push(`| ${r.name} | ${m.created?.slice(0, 10) ?? "?"} | ${m.lastCommit?.slice(0, 10) ?? "?"} | ${fmt(m.stars)} | ${fmt(m.forks?.active)}/${fmt(m.forks?.total)} | ${fmt(m.openIssues)} | ${fmt(m.prsClosed)} (${fmt(m.prsMerged)}) |${showLoc ? ` ${fmt(m.loc?.total)} |` : ""} ${dlCell(m, "d1")} | ${dlCell(m, "d7")} | ${dlCell(m, "d30")} | ${dlCell(m, "d182")} |`);
   }
   return L;
 }

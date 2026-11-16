@@ -394,6 +394,8 @@ test("metrics table shows unknown as ?, nothing to download as -, and partial wi
   assert.match(rows[0], /^\| b \| 2025-02-10 \| 2026-11-16 \| 5 \| 1\/4 \| 2 \| 10 \(8\) \| 12,000 \|/);
   assert.match(rows[1], /\| \? \| 3 \|/); // a: lines of code unknown
   assert.deepEqual(metricsSection([repo({ metrics: null })]), []);
+  const noLoc = metricsSection([repo({ name: "a", metrics: m({ loc: null }) })]);
+  assert.ok(!noLoc.some((l) => /Lines of code/.test(l)), "lines of code column is left out when it's off and never counted");
 });
 
 test("metric gaps are named, never hidden", () => {
