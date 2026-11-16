@@ -355,8 +355,8 @@ export function checksState(runs) {
 // code and downloads. Cheap fields are read every day; forks, merged PRs, lines of code and package discovery
 // once a week (metrics.weekday, UTC, 1 = Monday), and carried forward from the last snapshot between runs.
 // Anything that couldn't be read is null and named under "Couldn't check", never 0. Lines of code (a weekly shallow
-// clone of every repo) is off unless metrics.loc is true. See docs/how-it-works.md.
-const METRICS = { enabled: true, weekday: 1, activeForkMonths: 6, loc: false, packages: {}, ignorePackages: [], ...(cfg.metrics ?? {}) };
+// clone of every repo) can be switched off with metrics.loc: false. See docs/how-it-works.md.
+const METRICS = { enabled: true, weekday: 1, activeForkMonths: 6, loc: true, packages: {}, ignorePackages: [], ...(cfg.metrics ?? {}) };
 const metricGaps = { lastCommit: new Set(), prsClosed: new Set(), prsMerged: new Set(), forks: new Set(), loc: new Set(), downloads: new Set() };
 const METRIC_GAP_TEXT = { lastCommit: "last commit", prsClosed: "closed PR count", prsMerged: "merged PR count", forks: "active forks", loc: "lines of code", downloads: "some download counts" };
 export function metricGapLines(g, max = 8) {

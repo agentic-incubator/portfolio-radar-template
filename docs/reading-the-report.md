@@ -54,7 +54,7 @@ An archived repo runs no workflows, so a red last run there isn't counted. The r
 
 ## 7. Repo metrics
 
-One row per active repo, most stars first: created, last commit on the default branch, stars, forks (active/all), open issues, PRs closed (merged), lines of code (only when `metrics.loc` is on), and downloads for the last 24 hours, 7 days, 30 days and 6 months. What each one means and where it comes from is in [How it works](how-it-works.md#metrics).
+One row per active repo, most stars first: created, last commit on the default branch, stars, forks (active/all), open issues, PRs closed (merged), lines of code (left out when `metrics.loc` is `false`), and downloads for the last 24 hours, 7 days, 30 days and 6 months. What each one means and where it comes from is in [How it works](how-it-works.md#metrics).
 
 - **"?"** means the radar couldn't read it; the repo is named under "Couldn't check".
 - **"-"** in the download columns means the repo ships nothing countable: no release files and no packages that point back to it.
