@@ -8,7 +8,8 @@ A mission-control page that redraws this radar's findings every morning and puts
 - **Vitals** with a sparkline each, from the 60 days of totals in `data/dashboard.json`.
 - **Today's moves.** The scope, vitals and today's moves make up the **Overview**, which the page opens on.
 - **A section menu** shows one section at a time, grouped by what you do next: **Act now** (Needs you, Ready to ship, In flight), **Clean up in bulk** (One fix many repos, Dependency bots, Noise), **Keep an eye on** (Goals, Clients, Metrics, Drift) and **Today's read** (Couldn't check). Each tab shows a count, and `#<section>` at the end of the address opens one directly, for example `#metrics`.
-- **In flight** is a fixed-height table showing about 10 rows at a time; the rest scroll. Click When, Action, Repo or Status to sort.
+- **Every table sorts.** Click a column header to sort by it; click again to flip the order. Unknown values sort last either way, and each table remembers your choice. This covers Ready to ship, Dependency bots, Metrics and In flight.
+- **In flight** is a fixed-height table showing about 10 rows at a time; the rest scroll.
 - **Filters** by owner, and Clients for repos in `clientOwners` orgs. Filters and search apply to every section, vitals included: a filtered vital counts only the repos in view and shows the all-owners figure beside it, without the sparkline (history is kept for all repos only).
 - **Footer** with the credit line, the plugin version and the engine version (`engine` in `data/dashboard.json`). An engine older than 0.4.0 doesn't report one, and the footer says so.
 
@@ -31,6 +32,7 @@ The plugin picks the one your account supports.
 | Hand off | Fold bot PRs, Fix CI, Add AGENTS.md, Sweep one package across repos, Write a triage plan, and Move to Renovate (when turned on) | Claude opens a PR and stops. It never merges |
 | Approve a plan | On a finished triage plan: Approve, Approve, I OK it, Skip, Done | Each approved step becomes its own hand-off |
 | Ship it | On a person's PR whose CI was green this morning | Squash-merge and delete the branch, only if the head is unchanged and every check is still green. Only the dashboard's owner can press it |
+| Ship all | Top right of the Ready to ship table, when any PR in view was green this morning | First lists every green PR in view for you to confirm. Then Ship it runs on each one in turn, with the same checks just before each merge; a PR that changed, isn't green or can't merge is skipped. In flight shows each PR's result: merged, skipped and why, or failed. Only the dashboard's owner can press it |
 
 ## The rules every hand-off follows
 
