@@ -949,12 +949,12 @@ export function dlCell(m, k) {
   const since = m.downloads.partialSince?.[k];
   return since ? `${fmt(n)} since ${shortDay(since)}` : fmt(n);
 }
-export function metricsSection(repos) {
+export function metricsSection(repos, { loc = METRICS.loc } = {}) {
   const rows = repos.filter((r) => r.metrics).sort((a, b) => (b.metrics.stars ?? -1) - (a.metrics.stars ?? -1) || a.name.localeCompare(b.name));
   if (!rows.length) return [];
   const weekly = rows.map((r) => r.metrics.weeklyAt).filter(Boolean).sort().at(-1);
   // Lines of code is opt-in: with it off and nothing counted before, the column is left out rather than all "?".
-  const showLoc = METRICS.loc || rows.some((r) => r.metrics.loc);
+  const showLoc = loc || rows.some((r) => r.metrics.loc);
   const L = ["", "## 7. Repo metrics", "", `Forks, merged PRs${showLoc ? " and lines of code" : ""} measured weekly${weekly ? ` (last ${weekly})` : ""}; the rest daily. Downloads are release files plus npm, crates.io, PyPI and Docker Hub packages that point back to the repo. "since <date>" means the window isn't full yet; "?" means it couldn't be read; "-" means nothing to download.`, ""];
   L.push(`| Repo | Created | Last commit | Stars | Forks (active/all) | Open issues | PRs closed (merged) |${showLoc ? " Lines of code |" : ""} DL 24h | DL 7d | DL 30d | DL 6mo |`, `|---|---|---|---|---|---|---|${showLoc ? "---|" : ""}---|---|---|---|`);
   for (const r of rows) {
