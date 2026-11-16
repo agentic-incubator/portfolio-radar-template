@@ -6,11 +6,14 @@
 //            installation, and mints one read-only installation token per owner. No per-owner setup here.
 //   Local:   RADAR_TOKEN (any read-only token), or RADAR_USE_GH=1 to use your gh CLI login.
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
-import { execFileSync } from "node:child_process";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, mkdtempSync, rmSync, statSync, readdirSync } from "node:fs";
+import { execFileSync, execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { tmpdir } from "node:os";
 import { createSign } from "node:crypto";
 import { join, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+const execFileAsync = promisify(execFile);
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const cfg = JSON.parse(readFileSync(join(root, "radar.config.json"), "utf8"));
@@ -58,8 +61,14 @@ const OWNERS = [...(cfg.owners ?? [cfg.owner]), ...(cfg.clientOwners ?? [])];
 // ---------- API ----------
 // Returns the parsed body. With { withNext: true } returns { data, next }, where next is the Link header's
 // rel="next" path. GitHub's alert endpoints only support Link (cursor) paging, not ?page=N.
-async function api(path, { optional = false, owner, withNext = false } = {}) {
+// With { withLink: true } returns { data, link }, the raw Link header (used to read a count from rel="last").
+async function api(path, { optional = false, owner, withNext = false, withLink = false } = {}) {
   try {
+    if (USE_GH && withLink) {
+      const out = execFileSync("gh", ["api", "-i", "-H", "Accept: application/vnd.github+json", path], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 });
+      const cut = out.search(/\r?\n\r?\n/);
+      return { data: JSON.parse(out.slice(cut).trim() || "null"), link: /^link:\s*(.*)$/im.exec(out.slice(0, cut))?.[1] ?? null };
+    }
     if (USE_GH) {
       const out = execFileSync("gh", ["api", "-H", "Accept: application/vnd.github+json", path], {
         encoding: "utf8",
@@ -77,13 +86,14 @@ async function api(path, { optional = false, owner, withNext = false } = {}) {
         "User-Agent": "portfolio-radar",
       },
     });
-    if (res.status === 204) return withNext ? { data: null, next: null } : null;
+    if (res.status === 204) return withNext ? { data: null, next: null } : withLink ? { data: null, link: null } : null;
     if (!res.ok) {
       const err = new Error(`${res.status} ${path}`);
       err.status = res.status;
       throw err;
     }
     const data = await res.json();
+    if (withLink) return { data, link: res.headers.get("link") };
     if (!withNext) return data;
     const next = /<https:\/\/api\.github\.com([^>]+)>;\s*rel="next"/.exec(res.headers.get("link") ?? "")?.[1] ?? null;
     return { data, next };
@@ -234,14 +244,14 @@ export function detectUpdaters({ rootFiles = [], githubFiles = [], prs = [], iss
 async function collect(r) {
   const full = r.full_name;
   const branch = r.default_branch;
-  const [pulls, issues, runs, dependabot, codeScan, secretScan, release, agents, rootDir, ghDir, detail] = await Promise.all([
+  const [pulls, issues, runs, dependabot, codeScan, secretScan, releases, agents, rootDir, ghDir, detail] = await Promise.all([
     paged(`/repos/${full}/pulls?state=open`),
     paged(`/repos/${full}/issues?state=open`),
     api(`/repos/${full}/actions/runs?branch=${encodeURIComponent(branch)}&per_page=10&exclude_pull_requests=true`, { optional: true }),
     paged(`/repos/${full}/dependabot/alerts?state=open`),
     paged(`/repos/${full}/code-scanning/alerts?state=open`),
     paged(`/repos/${full}/secret-scanning/alerts?state=open`),
-    api(`/repos/${full}/releases/latest`, { optional: true }),
+    paged(`/repos/${full}/releases`, 1000), // all releases: the latest, and asset download counts for metrics
     api(`/repos/${full}/contents/AGENTS.md`, { optional: true }),
     api(`/repos/${full}/contents`, { optional: true }),
     api(`/repos/${full}/contents/.github`, { optional: true }),
@@ -287,6 +297,11 @@ async function collect(r) {
     number: i.number, title: i.title, url: i.html_url, created: i.created_at, labels: i.labels.map((l) => l.name), author: i.user?.login,
   }));
   const names = (dir) => (Array.isArray(dir) ? dir.map((f) => f.name) : []);
+  // /releases/latest is the newest published, non-draft, non-prerelease release; pick the same from the full list.
+  const release = (releases ?? []).filter((x) => !x.draft && !x.prerelease && x.published_at).sort((a, b) => b.published_at.localeCompare(a.published_at))[0] ?? null;
+  const metrics = METRICS.enabled && (r.kind ?? "active") === "active" && readable
+    ? await collectMetrics(r, { rootFiles: names(rootDir), issuesCount: issues === undefined ? null : realIssues.length, releases })
+    : null;
   const updates = readable ? detectUpdaters({ rootFiles: names(rootDir), githubFiles: names(ghDir), prs, issues: realIssues }) : null;
   const sev = (a) => (a.security_advisory?.severity || a.rule?.security_severity_level || a.rule?.severity || "unknown").toLowerCase();
 
@@ -295,7 +310,7 @@ async function collect(r) {
     kind: r.kind ?? "active", fork,
     defaultBranch: branch, pushedAt: r.pushed_at, language: r.language, topics: r.topics ?? [],
     readable, hasAgents: readable ? !!agents : null, latestRelease: release ? { tag: release.tag_name, published: release.published_at, url: release.html_url } : null,
-    prs, issues: realIssues, updates,
+    prs, issues: realIssues, updates, metrics,
     failingWorkflows: failing.map((x) => ({ name: x.name, url: x.html_url, at: x.updated_at })),
     dependabot: (dependabot ?? []).map((a) => ({ id: a.number, severity: sev(a), pkg: a.dependency?.package?.name, ecosystem: a.dependency?.package?.ecosystem, ghsa: a.security_advisory?.ghsa_id, summary: a.security_advisory?.summary, url: a.html_url })),
     codeScanning: (codeScan ?? []).map((a) => ({ id: a.number, severity: sev(a), rule: a.rule?.id, url: a.html_url })),
@@ -335,10 +350,345 @@ export function checksState(runs) {
   return "green";
 }
 
+// ---------- Metrics ----------
+// Per-repo numbers for a portfolio index: created, last commit, stars, forks, open issues, PRs closed, lines of
+// code and downloads. Cheap fields are read every day; forks, merged PRs, lines of code and package discovery
+// once a week (metrics.weekday, UTC, 1 = Monday), and carried forward from the last snapshot between runs.
+// Anything that couldn't be read is null and named under "Couldn't check", never 0. See docs/how-it-works.md.
+const METRICS = { enabled: true, weekday: 1, activeForkMonths: 6, loc: true, packages: {}, ignorePackages: [], ...(cfg.metrics ?? {}) };
+const metricGaps = { lastCommit: new Set(), prsClosed: new Set(), prsMerged: new Set(), forks: new Set(), loc: new Set(), downloads: new Set() };
+const METRIC_GAP_TEXT = { lastCommit: "last commit", prsClosed: "closed PR count", prsMerged: "merged PR count", forks: "active forks", loc: "lines of code", downloads: "some download counts" };
+export function metricGapLines(g, max = 8) {
+  return Object.entries(METRIC_GAP_TEXT).filter(([k]) => g[k]?.size).map(([k, what]) => {
+    const names = [...g[k]].sort();
+    return `Metrics: ${what} not read for ${plural(names.length, "repo")}: ${names.slice(0, max).join(", ")}${names.length > max ? ` and ${names.length - max} more` : ""}.`;
+  });
+}
+export const WINDOWS = { d1: 1, d7: 7, d30: 30, d182: 182 };
+const isoDay = (d) => new Date(d).toISOString().slice(0, 10);
+const minusDays = (day, n) => isoDay(new Date(`${day}T00:00:00Z`).getTime() - n * 86400e3);
+
+// A run is weekly on the configured weekday, when RADAR_WEEKLY=1, or when there's nothing to carry forward yet.
+export const isWeeklyRun = (date, prevWeeklyAt, weekday = METRICS.weekday, force = process.env.RADAR_WEEKLY === "1") =>
+  force || !prevWeeklyAt || new Date(date).getUTCDay() === weekday;
+
+// With per_page=1, the Link header's rel="last" page number is the total count. No Link header means it all fit.
+export function countFromLink(link, firstPageLength) {
+  const last = /[?&]page=(\d+)[^>]*>;\s*rel="last"/.exec(link ?? "")?.[1];
+  return last ? Number(last) : firstPageLength;
+}
+
+// A fork is active when its owner pushed to it after forking (GitHub sets a new fork's pushed_at to the parent's
+// last push, so a later pushed_at means work of their own) and that push was within the last `months` months.
+export function activeForks(forks, at = now, months = METRICS.activeForkMonths) {
+  const cutoff = at.getTime() - months * 30.44 * 86400e3;
+  return forks.filter((f) => f.pushed_at && f.created_at && new Date(f.pushed_at) - new Date(f.created_at) > 60e3 && new Date(f.pushed_at) >= cutoff).length;
+}
+
+// Does a registry's repository URL point back at this repo? Stops a name clash borrowing someone else's downloads.
+export function linksBack(url, fullName) {
+  if (!url || !fullName) return false;
+  const esc = fullName.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`github\\.com[/:]${esc}(\\.git)?([/#?].*)?$`).test(String(url).toLowerCase().trim());
+}
+
+// Windows from a daily series [{date, n}] (npm, crates.io, PyPI). Counted back from the series' last day.
+// If the series starts after a window's first day, the window is partial and carries the date it starts.
+export function windowsFromSeries(series) {
+  const days = new Map();
+  for (const { date, n } of series ?? []) days.set(date, (days.get(date) ?? 0) + (n ?? 0));
+  const dates = [...days.keys()].sort();
+  if (!dates.length) return null;
+  const last = dates.at(-1), first = dates[0];
+  const out = {};
+  for (const [k, n] of Object.entries(WINDOWS)) {
+    const start = minusDays(last, n - 1);
+    out[k] = { n: dates.filter((d) => d >= start).reduce((s, d) => s + days.get(d), 0), since: first > start ? first : null };
+  }
+  return out;
+}
+
+// Windows from lifetime totals (release assets, crates.io total, Docker Hub pulls): today's total minus the total
+// in an earlier snapshot. `history` is [{date, value}] from past snapshots. The base for each window is the newest
+// snapshot on or before the window's first day; if there's none that old, the oldest one after it, and the
+// window is labelled "since" that date. A total that went down (a release was deleted) gives null, never a number.
+export function windowsFromSnapshots(value, history, today) {
+  if (value == null) return null;
+  const hist = (history ?? []).filter((h) => h.value != null && h.date < today).sort((a, b) => a.date.localeCompare(b.date));
+  const out = {};
+  for (const [k, n] of Object.entries(WINDOWS)) {
+    const target = minusDays(today, n);
+    const base = [...hist].reverse().find((h) => h.date <= target) ?? hist.find((h) => h.date > target);
+    if (!base) { out[k] = { n: null, since: null, reason: "no earlier snapshot yet" }; continue; }
+    const d = value - base.value;
+    out[k] = d < 0 ? { n: null, since: null, reason: "total went down (a release or file was deleted)" } : { n: d, since: base.date !== target ? base.date : null };
+  }
+  return out;
+}
+
+// Add windows from several sources. Unknown in any source makes the window unknown (null); the "since" date is
+// the latest of the sources' since-dates, so the label never claims more time than every source covers.
+export function combineWindows(list) {
+  const out = {};
+  for (const k of Object.keys(WINDOWS)) {
+    const parts = list.filter(Boolean).map((w) => w[k]);
+    if (!parts.length) { out[k] = null; continue; }
+    if (parts.some((p) => p?.n == null)) { out[k] = null; continue; }
+    const since = parts.map((p) => p.since).filter(Boolean).sort().at(-1) ?? null;
+    out[k] = { n: parts.reduce((s, p) => s + p.n, 0), since };
+  }
+  return out;
+}
+
+// ---- Lines of code ----
+// Non-blank lines in tracked source files. Vendored, generated, lock and minified files don't count, nor do
+// data and docs (JSON, YAML, Markdown). Files over 1 MB are skipped as generated.
+const CODE_EXT = {
+  js: "JavaScript", mjs: "JavaScript", cjs: "JavaScript", jsx: "JavaScript", ts: "TypeScript", tsx: "TypeScript", mts: "TypeScript", cts: "TypeScript",
+  py: "Python", rs: "Rust", go: "Go", java: "Java", kt: "Kotlin", kts: "Kotlin", scala: "Scala", groovy: "Groovy", rb: "Ruby", php: "PHP",
+  cs: "C#", fs: "F#", c: "C", h: "C", cpp: "C++", cc: "C++", cxx: "C++", hpp: "C++", hh: "C++", m: "Objective-C", mm: "Objective-C", swift: "Swift",
+  dart: "Dart", lua: "Lua", r: "R", ex: "Elixir", exs: "Elixir", erl: "Erlang", hs: "Haskell", clj: "Clojure", ml: "OCaml", zig: "Zig", nim: "Nim",
+  sh: "Shell", bash: "Shell", zsh: "Shell", ps1: "PowerShell", sql: "SQL", html: "HTML", css: "CSS", scss: "CSS", sass: "CSS", less: "CSS",
+  vue: "Vue", svelte: "Svelte", astro: "Astro", tf: "HCL", hcl: "HCL", proto: "Protocol Buffers", sol: "Solidity",
+};
+const SKIP_DIRS = /(^|\/)(node_modules|vendor|vendors|third_party|third-party|dist|build|out|target|coverage|\.next|\.nuxt|\.svelte-kit|__generated__|generated)\//i;
+const SKIP_FILES = /(\.min\.(js|css)$|\.bundle\.js$|\.pb\.go$|_pb2\.py$|_generated\.\w+$|\.generated\.\w+$|\.d\.ts$)/i;
+export const languageOf = (path) => CODE_EXT[/\.([^./]+)$/.exec(path)?.[1]?.toLowerCase() ?? ""] ?? null;
+// .gitattributes lines marking linguist-vendored or linguist-generated, turned into path tests.
+export function attributeSkips(text = "") {
+  const out = [];
+  for (const line of text.split("\n")) {
+    const [pat, ...attrs] = line.trim().split(/\s+/);
+    if (!pat || pat.startsWith("#")) continue;
+    if (!attrs.some((a) => /^linguist-(vendored|generated)(=true)?$/.test(a))) continue;
+    const anchored = pat.startsWith("/") || pat.slice(0, -1).includes("/");
+    let re = pat.replace(/^\//, "").replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*\*\/?/g, "\u0000").replace(/\*/g, "[^/]*").replace(/\?/g, "[^/]").replace(/\u0000/g, ".*");
+    if (re.endsWith("/")) re += ".*";
+    out.push(new RegExp(`${anchored ? "^" : "(^|/)"}${re}(/.*)?$`));
+  }
+  return out;
+}
+export const countedFile = (path, skips = []) => !!languageOf(path) && !SKIP_DIRS.test(path) && !SKIP_FILES.test(path) && !skips.some((re) => re.test(path));
+export function countLines(text) {
+  if (text.slice(0, 8000).includes("\u0000")) return 0; // binary
+  let n = 0;
+  for (const line of text.split("\n")) if (/\S/.test(line)) n++;
+  return n;
+}
+// Count a shallow clone. Read-only: the clone goes to a temp folder that's removed afterwards.
+async function linesOfCode(r) {
+  const token = USE_GH ? (() => { try { return execFileSync("gh", ["auth", "token"], { encoding: "utf8" }).trim(); } catch { return null; } })() : tokenFor(r.owner.login);
+  const dir = mkdtempSync(join(tmpdir(), "radar-loc-"));
+  try {
+    const env = { ...process.env, GIT_TERMINAL_PROMPT: "0" };
+    if (token) Object.assign(env, { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader", GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}` });
+    await execFileAsync("git", ["clone", "--depth", "1", "--single-branch", "--no-tags", "--quiet", `https://github.com/${r.full_name}.git`, dir], { env, timeout: 180e3 });
+    const files = (await execFileAsync("git", ["-C", dir, "ls-files", "-z"], { maxBuffer: 256 * 1024 * 1024 })).stdout.split("\u0000").filter(Boolean);
+    const attrs = existsSync(join(dir, ".gitattributes")) ? readFileSync(join(dir, ".gitattributes"), "utf8") : "";
+    const skips = attributeSkips(attrs);
+    const byLanguage = {};
+    let total = 0;
+    for (const f of files) {
+      if (!countedFile(f, skips)) continue;
+      const p = join(dir, f);
+      let st;
+      try { st = statSync(p); } catch { continue; }
+      if (!st.isFile() || st.size > 1024 * 1024) continue;
+      const n = countLines(readFileSync(p, "utf8"));
+      if (!n) continue;
+      const lang = languageOf(f);
+      byLanguage[lang] = (byLanguage[lang] ?? 0) + n;
+      total += n;
+    }
+    return { total, byLanguage };
+  } catch {
+    return null; // never echo git's error: it can carry the clone URL
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// ---- Downloads ----
+const UA = { "User-Agent": "portfolio-radar (https://github.com/agentic-incubator/portfolio-radar-template)" };
+async function ext(url) {
+  try {
+    const res = await fetch(url, { headers: { ...UA, Accept: "application/json" } });
+    return res.ok ? await res.json() : undefined;
+  } catch { return undefined; }
+}
+const fileText = async (full, path) => {
+  const f = await api(`/repos/${full}/contents/${path}`, { optional: true });
+  return f?.content ? Buffer.from(f.content, "base64").toString("utf8") : null;
+};
+// Package names declared in root manifests. Workspaces and monorepo members aren't followed: add those under
+// metrics.packages in radar.config.json.
+export function manifestPackages({ packageJson, cargoToml, pyproject }) {
+  const out = [];
+  try { const p = packageJson && JSON.parse(packageJson); if (p?.name && p.private !== true) out.push(`npm:${p.name}`); } catch {}
+  const tomlName = (text, section) => {
+    const body = new RegExp(`^\\[${section}\\]\\s*$([\\s\\S]*?)(?=^\\[|(?![\\s\\S]))`, "m").exec(text ?? "")?.[1];
+    if (!body || /^\s*publish\s*=\s*false/m.test(body)) return null;
+    return /^\s*name\s*=\s*["']([^"']+)["']/m.exec(body)?.[1] ?? null;
+  };
+  const crate = tomlName(cargoToml, "package"); if (crate) out.push(`crates:${crate}`);
+  const py = tomlName(pyproject, "project") ?? tomlName(pyproject, "tool\\.poetry"); if (py) out.push(`pypi:${py}`);
+  return out;
+}
+// Weekly: find this repo's packages and keep the ones whose registry entry points back at it.
+async function discoverPackages(r, rootFiles) {
+  const full = r.full_name;
+  const has = (n) => rootFiles.includes(n);
+  const candidates = manifestPackages({
+    packageJson: has("package.json") ? await fileText(full, "package.json") : null,
+    cargoToml: has("Cargo.toml") ? await fileText(full, "Cargo.toml") : null,
+    pyproject: has("pyproject.toml") ? await fileText(full, "pyproject.toml") : null,
+  });
+  const verified = [], unverified = [];
+  for (const id of candidates) {
+    const [reg, name] = [id.slice(0, id.indexOf(":")), id.slice(id.indexOf(":") + 1)];
+    let urls = [];
+    if (reg === "npm") { const d = await ext(`https://registry.npmjs.org/${name.replace("/", "%2F")}`); if (d) urls = [d.repository?.url ?? d.repository, d.homepage, d.bugs?.url]; }
+    if (reg === "crates") { const d = await ext(`https://crates.io/api/v1/crates/${encodeURIComponent(name)}`); if (d) urls = [d.crate?.repository, d.crate?.homepage]; }
+    if (reg === "pypi") { const d = await ext(`https://pypi.org/pypi/${encodeURIComponent(name)}/json`); if (d) urls = [d.info?.home_page, ...Object.values(d.info?.project_urls ?? {})]; }
+    if (urls.some((u) => linksBack(typeof u === "string" ? u : u?.url, full))) verified.push(id); else unverified.push(id);
+  }
+  return { verified, unverified };
+}
+const daysAgo = (n) => minusDays(today, n);
+// Daily counts for one package: a series where the registry gives one, a lifetime total where it doesn't.
+async function packageCounts(id) {
+  const reg = id.slice(0, id.indexOf(":")), name = id.slice(id.indexOf(":") + 1);
+  if (reg === "npm") {
+    const d = await ext(`https://api.npmjs.org/downloads/range/${daysAgo(183)}:${daysAgo(1)}/${name}`);
+    return d?.downloads ? { series: d.downloads.map((x) => ({ date: x.day, n: x.downloads })) } : undefined;
+  }
+  if (reg === "pypi") {
+    const d = await ext(`https://pypistats.org/api/packages/${encodeURIComponent(name.toLowerCase())}/overall?mirrors=false`);
+    return d?.data ? { series: d.data.filter((x) => x.category === "without_mirrors").map((x) => ({ date: x.date, n: x.downloads })) } : undefined;
+  }
+  if (reg === "crates") {
+    const [c, d] = await Promise.all([ext(`https://crates.io/api/v1/crates/${encodeURIComponent(name)}`), ext(`https://crates.io/api/v1/crates/${encodeURIComponent(name)}/downloads`)]);
+    if (!c || !d) return undefined;
+    // crates.io gives 90 days of daily counts, so 6 months comes from snapshots of the lifetime total.
+    return { series: [...(d.version_downloads ?? []), ...(d.meta?.extra_downloads ?? [])].map((x) => ({ date: x.date, n: x.downloads })), lifetime: c.crate?.downloads ?? null, seriesFor: ["d1", "d7", "d30"] };
+  }
+  if (reg === "dockerhub") {
+    const d = await ext(`https://hub.docker.com/v2/repositories/${name}/`);
+    return d?.pull_count != null ? { lifetime: d.pull_count } : undefined;
+  }
+  return undefined;
+}
+const configured = (r, key) => {
+  const m = METRICS[key] ?? {};
+  return [...new Set([...(m[r.name] ?? []), ...(m[r.full_name] ?? [])])];
+};
+
+// Earlier snapshots' lifetime totals, read lazily from data/<date>.json and cached per file.
+const snapCache = new Map();
+function snapshotTotals(date) {
+  if (snapCache.has(date)) return snapCache.get(date);
+  let out = null;
+  try {
+    const s = JSON.parse(readFileSync(join(root, "data", `${date}.json`), "utf8"));
+    out = new Map((s.repos ?? []).filter((r) => r.metrics?.downloads?.lifetime).map((r) => [r.fullName, r.metrics.downloads.lifetime]));
+  } catch {}
+  snapCache.set(date, out);
+  return out;
+}
+let snapDates = null;
+function historyOf(fullName, source) {
+  snapDates ??= (() => { try { return readdirSync(join(root, "data")).map((f) => /^(\d{4}-\d{2}-\d{2})\.json$/.exec(f)?.[1]).filter(Boolean).sort(); } catch { return []; } })();
+  // Only the files a window needs: the newest at or before each target, else the oldest after it with totals.
+  const want = new Set();
+  for (const n of Object.values(WINDOWS)) {
+    const target = minusDays(today, n);
+    const before = snapDates.filter((d) => d <= target).reverse().find((d) => snapshotTotals(d)?.has(fullName));
+    if (before) want.add(before);
+    else { const after = snapDates.filter((d) => d > target && d < today).find((d) => snapshotTotals(d)?.has(fullName)); if (after) want.add(after); }
+  }
+  return [...want].map((date) => ({ date, value: snapshotTotals(date)?.get(fullName)?.[source] ?? null }));
+}
+
+async function collectMetrics(r, { rootFiles, issuesCount, releases }) {
+  const full = r.full_name, branch = r.default_branch;
+  const prevM = (PREV?.repos ?? []).find((p) => p.fullName === full)?.metrics ?? null;
+  const weekly = isWeeklyRun(today, prevM?.weeklyAt);
+
+  // Last commit on the default branch; reused when nothing has been pushed since the last run.
+  let lastCommit = prevM && prevM.lastCommit && prevM.pushedAt === r.pushed_at ? prevM.lastCommit : undefined;
+  if (lastCommit === undefined) {
+    const c = await api(`/repos/${full}/commits?sha=${encodeURIComponent(branch)}&per_page=1`, { optional: true });
+    lastCommit = c === undefined ? null : c?.[0]?.commit?.committer?.date ?? c?.[0]?.commit?.author?.date ?? null;
+    if (c === undefined && r.size !== 0) metricGaps.lastCommit.add(full);
+  }
+  const closed = await api(`/repos/${full}/pulls?state=closed&per_page=1`, { optional: true, withLink: true });
+  const prsClosed = closed === undefined ? null : countFromLink(closed.link, closed.data?.length ?? 0);
+  if (prsClosed === null) metricGaps.prsClosed.add(full);
+
+  let forksActive = prevM?.forks?.active ?? null, prsMerged = prevM?.prsMerged ?? null, loc = prevM?.loc ?? null;
+  let packages = prevM?.packages ?? { verified: [], unverified: [] };
+  if (weekly) {
+    if (!r.forks_count) forksActive = 0;
+    else {
+      const forks = await paged(`/repos/${full}/forks?sort=newest`, 3000);
+      forksActive = forks === undefined ? null : activeForks(forks);
+      if (forks === undefined) metricGaps.forks.add(full);
+    }
+    prsMerged = await searchTotal(`repo:${full} is:pr is:merged`, r.owner.login);
+    if (prsMerged === null) metricGaps.prsMerged.add(full);
+    if (METRICS.loc) { loc = await linesOfCode(r); if (loc) loc.at = today; else metricGaps.loc.add(full); }
+    packages = await discoverPackages(r, rootFiles);
+  }
+
+  // Downloads: release assets (lifetime totals → snapshot deltas) plus each package.
+  const pkgIds = [...new Set([...packages.verified, ...configured(r, "packages")])].filter((id) => !(METRICS.ignorePackages ?? []).includes(id));
+  const lifetime = {}, windows = [], sources = [];
+  if (releases === undefined) metricGaps.downloads.add(full);
+  else if (releases.some((x) => x.assets?.length)) {
+    lifetime.releases = releases.reduce((s, x) => s + (x.assets ?? []).reduce((t, a) => t + (a.download_count ?? 0), 0), 0);
+    sources.push("releases");
+    windows.push(windowsFromSnapshots(lifetime.releases, historyOf(full, "releases"), today));
+  }
+  for (const id of pkgIds) {
+    sources.push(id);
+    const c = await packageCounts(id);
+    if (!c) { metricGaps.downloads.add(full); windows.push(Object.fromEntries(Object.keys(WINDOWS).map((k) => [k, { n: null }]))); continue; }
+    if (c.lifetime != null) lifetime[id] = c.lifetime;
+    const fromSeries = c.series ? windowsFromSeries(c.series) : null;
+    const fromSnaps = c.lifetime != null ? windowsFromSnapshots(c.lifetime, historyOf(full, id), today) : null;
+    windows.push(Object.fromEntries(Object.keys(WINDOWS).map((k) => [k, (c.seriesFor ?? Object.keys(WINDOWS)).includes(k) && fromSeries ? fromSeries[k] : fromSnaps?.[k] ?? { n: null }])));
+  }
+  const w = sources.length ? combineWindows(windows) : null;
+  const flat = (k) => w?.[k]?.n ?? null;
+  const partialSince = Object.fromEntries(Object.keys(WINDOWS).filter((k) => w?.[k]?.since).map((k) => [k, w[k].since]));
+
+  return {
+    created: r.created_at ?? null,
+    pushedAt: r.pushed_at ?? null,
+    lastCommit,
+    stars: r.stargazers_count ?? null,
+    openIssues: issuesCount,
+    prsClosed, prsMerged,
+    forks: { total: r.forks_count ?? null, active: forksActive, activeMonths: METRICS.activeForkMonths },
+    loc,
+    downloads: { sources, packages, lifetime, d1: flat("d1"), d7: flat("d7"), d30: flat("d30"), d182: flat("d182"), partialSince },
+    weeklyAt: weekly ? today : prevM?.weeklyAt ?? null,
+  };
+}
+
+// Search allows 30 requests a minute, so search calls queue one after another, about 2 seconds apart.
+let searchChain = Promise.resolve();
+function searchTotal(q, owner) {
+  const run = searchChain.then(() => api(`/search/issues?q=${encodeURIComponent(q)}&per_page=1`, { optional: true, owner }));
+  searchChain = run.catch(() => {}).then(() => new Promise((ok) => setTimeout(ok, 2100)));
+  return run.then((d) => (d?.total_count ?? null), () => null);
+}
+
 // ---------- Analyse ----------
 const SEV_RANK = { critical: 4, high: 3, medium: 2, moderate: 2, low: 1, note: 0, warning: 1, error: 3, unknown: 0 };
 const days = (iso) => Math.floor((now - new Date(iso)) / 86400e3);
 const isNew = (iso) => iso && new Date(iso) >= since;
+let PREV = null; // the previous snapshot, for metrics carried forward between weekly runs
 
 export function analyse(repos, prev, noise = []) {
   const prevAlerts = new Set();
@@ -524,6 +874,7 @@ export function dashboard(repos, a, { generated = now.toISOString(), warnings: w
         botPrs: { renovate: bots.filter((p) => p.updater === "renovate").length, dependabot: bots.filter((p) => p.updater === "dependabot").length, other: bots.filter((p) => !p.updater).length },
         issues: r.issues.length,
         updaters: r.updates ? { tools: r.updates.tools, configured: r.updates.configured, dashboard: r.updates.dashboard } : null,
+        metrics: r.metrics ?? null,
       };
     }).sort((x, y) => y.score - x.score || x.name.localeCompare(y.name)),
     needs: a.needs.slice(0, 40).map((n) => n.text),
@@ -576,6 +927,7 @@ export function render(repos, a, proj) {
     const rec = n.options[0];
     L.push(`- **${n.name}** (${n.kind}): ${what}.${fork} Suggested: ${rec.label.toLowerCase()} (${rec.effect}) Other options: ${n.options.slice(1).map((o) => o.label.toLowerCase()).join("; ")}. [repo](${n.url})`);
   }
+  L.push(...metricsSection(repos));
   if (proj?.length) {
     L.push("", "## GitHub Projects", "");
     for (const p of proj) L.push(`- ${p.owner}: [${p.title}](${p.url}): ${p.items} items (${Object.entries(p.byStatus).map(([k, v]) => `${k} ${v}`).join(", ")}), updated ${days(p.updatedAt)}d ago`);
@@ -583,6 +935,30 @@ export function render(repos, a, proj) {
   if (warnings.size) L.push("", "## Couldn't check", "", ...[...warnings].map((w) => `- ${w}`));
   L.push("", `_Generated by portfolio-radar${ENGINE_VERSION ? ` engine v${ENGINE_VERSION}` : ""}. Read-only: it never changes a repo._`, "", "_Built with ❤️ by Chris Phillipson, Principal, CP Ventures Group, LLC_", "");
   return L.join("\n");
+}
+
+// Section 7: one row per active repo, sorted by stars. "?" = couldn't be read; "-" = nothing to download.
+const fmt = (n) => (n == null ? "?" : Number(n).toLocaleString("en-US"));
+const shortDay = (d) => new Date(`${d}T00:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+export function dlCell(m, k) {
+  if (!m?.downloads) return "?";
+  if (!m.downloads.sources.length) return "-";
+  const n = m.downloads[k];
+  if (n == null) return "?";
+  const since = m.downloads.partialSince?.[k];
+  return since ? `${fmt(n)} since ${shortDay(since)}` : fmt(n);
+}
+export function metricsSection(repos) {
+  const rows = repos.filter((r) => r.metrics).sort((a, b) => (b.metrics.stars ?? -1) - (a.metrics.stars ?? -1) || a.name.localeCompare(b.name));
+  if (!rows.length) return [];
+  const weekly = rows.map((r) => r.metrics.weeklyAt).filter(Boolean).sort().at(-1);
+  const L = ["", "## 7. Repo metrics", "", `Forks, merged PRs and lines of code measured weekly${weekly ? ` (last ${weekly})` : ""}; the rest daily. Downloads are release files plus npm, crates.io, PyPI and Docker Hub packages that point back to the repo. "since <date>" means the window isn't full yet; "?" means it couldn't be read; "-" means nothing to download.`, ""];
+  L.push("| Repo | Created | Last commit | Stars | Forks (active/all) | Open issues | PRs closed (merged) | Lines of code | DL 24h | DL 7d | DL 30d | DL 6mo |", "|---|---|---|---|---|---|---|---|---|---|---|---|");
+  for (const r of rows) {
+    const m = r.metrics;
+    L.push(`| ${r.name} | ${m.created?.slice(0, 10) ?? "?"} | ${m.lastCommit?.slice(0, 10) ?? "?"} | ${fmt(m.stars)} | ${fmt(m.forks?.active)}/${fmt(m.forks?.total)} | ${fmt(m.openIssues)} | ${fmt(m.prsClosed)} (${fmt(m.prsMerged)}) | ${fmt(m.loc?.total)} | ${dlCell(m, "d1")} | ${dlCell(m, "d7")} | ${dlCell(m, "d30")} | ${dlCell(m, "d182")} |`);
+  }
+  return L;
 }
 
 // ---------- Main ----------
@@ -596,6 +972,7 @@ if (!APP && !TOKEN && !USE_GH && !OWNERS.some((o) => process.env[envName(o)])) {
 }
 const prevPath = join(root, "data", "latest.json");
 const prev = existsSync(prevPath) ? JSON.parse(readFileSync(prevPath, "utf8")) : null;
+PREV = prev;
 let repos = await listRepos();
 if (LIMIT) repos = repos.slice(0, LIMIT);
 const collected = [];
@@ -606,7 +983,7 @@ for (let i = 0; i < repos.length; i += 6) {
     return null;
   })))).filter(Boolean));
 }
-for (const line of gapLines(gaps)) warnings.add(line);
+for (const line of [...gapLines(gaps), ...metricGapLines(metricGaps)]) warnings.add(line);
 const proj = await projects();
 const active = collected.filter((r) => r.kind === "active");
 const noise = collected.filter((r) => r.kind !== "active");

@@ -16,20 +16,56 @@
    | Dependabot alerts | `/repos/{r}/dependabot/alerts` | Dependabot alerts |
    | Code scanning | `/repos/{r}/code-scanning/alerts` | Code scanning alerts |
    | Secret scanning | `/repos/{r}/secret-scanning/alerts` | Secret scanning alerts |
-   | Latest release | `/repos/{r}/releases/latest` | Contents |
+   | Releases (latest, asset download counts) | `/repos/{r}/releases` | Contents |
    | AGENTS.md present | `/repos/{r}/contents/AGENTS.md` | Contents |
    | Renovate / Dependabot config | `/repos/{r}/contents` and `/contents/.github` (file names only) | Contents |
    | Repo list, push date | `/installation/repositories` | Metadata |
    | CI on open PRs | `/repos/{r}/actions/runs?head_sha=…` for each non-draft human PR (up to `maxPrsListed`) | Actions |
    | Fork's parent, commits ahead/behind | `/repos/{r}` and `/repos/{r}/compare/{parent}:{branch}...{owner}:{branch}` (forks only) | Metadata, Contents |
    | GitHub Projects (org) | GraphQL `organization.projectsV2` | Organization → Projects |
+   | Metrics (active repos) | See [Metrics](#metrics) below | Metadata, Contents, Pull requests |
 
    A PR's CI state comes from the latest Actions run of each workflow on its head commit: green (all passed or skipped), red, pending, or none. Checks from other apps aren't read, because that would need the Checks permission; the dashboard's Ship it action checks the full status again before merging.
    A 403/404 on one check (for example, code scanning switched off) marks that check unreadable rather than failing the run.
    Which dependency updater a repo uses comes from three signals: a Renovate config file (`renovate.json`, `renovate.json5`, `.renovaterc`, `.renovaterc.json`, `.renovaterc.json5` at the root, or `renovate.json(5)` in `.github/`), a `.github/dependabot.yml`, and who opened the open PRs (`renovate[bot]`, a self-hosted `renovate-*` user, or `dependabot[bot]`). Renovate's "Dependency Dashboard" issue also counts, which catches Renovate configured inside `package.json`. Dependabot *alerts* are GitHub's vulnerability alerts and are read for every repo whichever updater it uses.
-4. **Analyse.** It ranks findings (see [Reading the report](reading-the-report.md)) and compares today's alerts with `data/latest.json` from the last run, so newly opened alerts are called out.
-5. **Write.** `reports/YYYY-MM-DD.md`, `reports/latest.md`, `data/YYYY-MM-DD.json`, `data/latest.json` (active repos under `repos`, archived and forked ones under `noise`), and `data/dashboard.json`, the compact view the dashboard artifact reads. It keeps one totals row per day for the last 60 days, carried forward from the previous file.
-6. **Commit.** The workflow commits `reports/` and `data/` as `portfolio-radar` with `chore(report): daily radar <date>`. This uses the workflow's own `GITHUB_TOKEN`, not the app.
+4. **Metrics.** For each active repo, the numbers in section 7 of the report. See [Metrics](#metrics).
+5. **Analyse.** It ranks findings (see [Reading the report](reading-the-report.md)) and compares today's alerts with `data/latest.json` from the last run, so newly opened alerts are called out.
+6. **Write.** `reports/YYYY-MM-DD.md`, `reports/latest.md`, `data/YYYY-MM-DD.json`, `data/latest.json` (active repos under `repos`, archived and forked ones under `noise`), and `data/dashboard.json`, the compact view the dashboard artifact reads. It keeps one totals row per day for the last 60 days, carried forward from the previous file.
+7. **Commit.** The workflow commits `reports/` and `data/` as `portfolio-radar` with `chore(report): daily radar <date>`. This uses the workflow's own `GITHUB_TOKEN`, not the app.
+
+## Metrics
+
+Per active repo, stored as `metrics` in `data/latest.json` and shown in section 7 of the report. Anything that can't be read is `null`, shows as "?" and is named under "Couldn't check". It is never shown as 0.
+
+| Metric | Meaning | Source | Refresh |
+|---|---|---|---|
+| `created` | When the repo was created on GitHub | Repo record (no extra call) | Daily |
+| `lastCommit` | Newest commit on the default branch (`pushedAt` counts any branch) | `/repos/{r}/commits?sha={branch}&per_page=1`, skipped when nothing was pushed since the last run | Daily |
+| `stars` | Stargazers | Repo record | Daily |
+| `openIssues` | Open issues, not counting PRs | The open issue list already read | Daily |
+| `prsClosed` | Every PR ever closed, merged or not | The `rel="last"` page of `/repos/{r}/pulls?state=closed&per_page=1` | Daily |
+| `prsMerged` | Every PR ever merged | Search `repo:{r} is:pr is:merged` (30 searches a minute, so they queue about 2 seconds apart) | Weekly |
+| `forks.total` / `forks.active` | All direct forks / forks whose owner pushed after forking, last push within `metrics.activeForkMonths` months | Repo record / `/repos/{r}/forks` (only when there are forks) | Daily / weekly |
+| `loc` | Non-blank lines in tracked source files, total and by language | A shallow clone of the default branch into a temp folder, removed afterwards | Weekly |
+| `downloads` | Release file downloads plus package downloads, for the last 1, 7, 30 and 182 days (`d1`, `d7`, `d30`, `d182`) | See below | Daily |
+
+Weekly fields refresh on `metrics.weekday` (UTC, 1 = Monday), on the first run, or when you run with `RADAR_WEEKLY=1`. In between they're carried forward from the last snapshot, and `weeklyAt` says when they were measured.
+
+**Lines of code** count files in a programming, markup or stylesheet language (by extension). They skip Markdown, JSON, YAML and other data; files over 1 MB; minified, bundled and lock files; `node_modules/`, `vendor/`, `third_party/`, `dist/`, `build/`, `target/` and similar folders; and paths marked `linguist-vendored` or `linguist-generated` in `.gitattributes`. Comments count as lines. The clone uses the owner's read-only token through a git header, never in the URL.
+
+**Downloads.** GitHub has no single download number, and its clone and view traffic needs a write-level permission and keeps only 14 days, so it isn't used. The radar adds up:
+
+| Source | What it gives | How the windows are filled |
+|---|---|---|
+| GitHub release assets | Lifetime count per file | Today's total minus the total in an earlier `data/<date>.json` snapshot |
+| npm (`api.npmjs.org`) | Daily counts, up to 18 months | Read directly |
+| crates.io | Daily counts for 90 days, plus a lifetime total | 1, 7 and 30 days directly; 182 days from snapshots |
+| PyPI (`pypistats.org`, without mirrors) | Daily counts for 180 days | Read directly |
+| Docker Hub | Lifetime pull count | From snapshots |
+
+A package counts for a repo only when its registry entry points back to that repo (npm `repository`, `homepage` or `bugs`; crates.io `repository` or `homepage`; PyPI project URLs), so a name clash can't borrow someone else's downloads. Once a week the radar looks for packages in the root `package.json` (unless `private`), `Cargo.toml` (`[package]`, unless `publish = false`) and `pyproject.toml`, and keeps the ones that link back (`downloads.packages.verified`; the rest are listed as `unverified`). Workspace members aren't followed: add them, or a Docker Hub image, under `metrics.packages`.
+
+Snapshot windows need a snapshot that old. For each window the base is the newest snapshot on or before the window's first day; if there isn't one, the oldest snapshot after it, and the window is labelled "since" that date (`downloads.partialSince`). A missed daily run can do the same in the other direction (the base is older than the window), and the label shows it. A total that went down (a release or file was deleted) makes the window unknown. When sources cover different spans, the label shows the shortest. A repo with no release files and no packages shows "-".
 
 ## Auth in one picture
 
@@ -76,3 +112,4 @@ Fine-grained personal tokens cover one owner each, expire (a year at most), and 
 | `ignoreRepos` | Repo names to skip |
 | `noise` | `{ "archived": true, "forks": true }`: include archived repos and forks as noise. `false` leaves that kind out |
 | `activeForks` | Forks that are really your own work (`name` or `owner/name`): reported as active repos |
+| `metrics` | Optional. `enabled` (default `true`), `weekday` for the weekly fields (UTC, 0 = Sunday, default `1`), `activeForkMonths` (default `6`), `loc` (default `true`; `false` skips the weekly clones), `packages` (repo `name` or `owner/name` → list such as `["npm:@scope/pkg", "crates:name", "pypi:name", "dockerhub:ns/repo"]`, counted without the link-back check), `ignorePackages` (ids to leave out). See [Metrics](#metrics) |

@@ -52,6 +52,15 @@ Each line suggests one way to deal with it, then lists the others:
 
 An archived repo runs no workflows, so a red last run there isn't counted. The radar never acts on any of this itself. The [dashboard](dashboard.md) offers each option as a button.
 
+## 7. Repo metrics
+
+One row per active repo, most stars first: created, last commit on the default branch, stars, forks (active/all), open issues, PRs closed (merged), lines of code, and downloads for the last 24 hours, 7 days, 30 days and 6 months. What each one means and where it comes from is in [How it works](how-it-works.md#metrics).
+
+- **"?"** means the radar couldn't read it; the repo is named under "Couldn't check".
+- **"-"** in the download columns means the repo ships nothing countable: no release files and no packages that point back to it.
+- **"N since Nov 17"** means the window isn't full yet. Release and Docker Hub downloads come from comparing daily snapshots, so the 6-month column fills six months after the radar starts counting. npm and PyPI windows are full from the first run.
+- Forks, merged PRs and lines of code are measured once a week; the line above the table says when.
+
 ## GitHub Projects
 
 Open org Projects, with item counts by Status and when each was last updated.
@@ -62,6 +71,7 @@ Anything the radar couldn't read, and why. Typical entries:
 
 - *Not checked: <owner>. The GitHub App isn't installed there yet.* Install it (see [Setup](setup.md)).
 - *Code scanning (or secret scanning, or Dependabot alerts) not readable for N repos: …* The repos are named. Usually the feature is simply off: code and secret scanning on private repos need GitHub Advanced Security. Switch it on in the repo's Security settings if you want it. If it's on, the app is missing that read permission.
+- *Metrics: <metric> not read for N repos: …* That number shows as "?" in section 7. A registry being down shows up here too, as download counts.
 - *GitHub Projects not read for <owner>.* The app needs Organization → Projects: read, or the org hasn't approved the updated permissions.
 
 ## Footer
