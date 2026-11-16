@@ -6,8 +6,10 @@ A mission-control page that redraws this radar's findings every morning and puts
 
 - **The scope.** Every active repo is a dot, grouped by owner. The closer to the centre, the sooner it needs you. Colour is the worst signal: magenta for an exposed secret, orange for critical or high alerts, amber for red CI, cyan for people's PRs, violet for piled-up bot PRs, grey for quiet repos. Dots that got worse since yesterday pulse.
 - **Vitals** with a sparkline each, from the 60 days of totals in `data/dashboard.json`.
-- **Today's moves**, then lanes: Needs you, Ready to ship, One fix many repos, Dependency bots, Goals, Clients, Noise, Drift, In flight, and Couldn't check.
-- **Filters** by owner, and Clients for repos in `clientOwners` orgs.
+- **Today's moves.** The scope, vitals and today's moves make up the **Overview**, which the page opens on.
+- **A section menu** shows one section at a time, grouped by what you do next: **Act now** (Needs you, Ready to ship, In flight), **Clean up in bulk** (One fix many repos, Dependency bots, Noise), **Keep an eye on** (Goals, Clients, Metrics, Drift) and **Today's read** (Couldn't check). Each tab shows a count, and `#<section>` at the end of the address opens one directly, for example `#metrics`.
+- **In flight** is a fixed-height table showing about 10 rows at a time; the rest scroll. Click When, Action, Repo or Status to sort.
+- **Filters** by owner, and Clients for repos in `clientOwners` orgs. Filters and search apply to every section, vitals included: a filtered vital counts only the repos in view and shows the all-owners figure beside it, without the sparkline (history is kept for all repos only).
 - **Footer** with the credit line, the plugin version and the engine version (`engine` in `data/dashboard.json`). An engine older than 0.4.0 doesn't report one, and the footer says so.
 
 ## Three ways to run it
