@@ -34,6 +34,7 @@ The plugin picks the one your account supports.
 | Approve a plan | On a finished triage plan: Approve, Approve, I OK it, Skip, Done | Each approved step becomes its own hand-off |
 | Ship it | On a person's PR whose CI was green this morning | Squash-merge and delete the branch, only if the head is unchanged and every check is still green. Only the dashboard's owner can press it |
 | Ship all | Top right of the Ready to ship table, when any PR in view was green this morning | First lists every green PR in view for you to confirm. Then Ship it runs on each one in turn, with the same checks just before each merge; a PR that changed, isn't green or can't merge is skipped. In flight shows each PR's result: merged, skipped and why, or failed. Only the dashboard's owner can press it |
+| (after Ship it or Ship all) | Ready to ship | The PR leaves the table, the tab count and the Ship all count at once and shows under In flight. If its request stops, or Ship all reports it skipped or failed, it comes back. Requests older than the morning's data are ignored, since that data already shows what merged |
 
 ## The rules every hand-off follows
 
