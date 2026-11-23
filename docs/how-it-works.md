@@ -67,6 +67,21 @@ A package counts for a repo only when its registry entry points back to that rep
 
 Snapshot windows need a snapshot that old. For each window the base is the newest snapshot on or before the window's first day; if there isn't one, the oldest snapshot after it, and the window is labelled "since" that date (`downloads.partialSince`). A missed daily run can do the same in the other direction (the base is older than the window), and the label shows it. A total that went down (a release or file was deleted) makes the window unknown. When sources cover different spans, the label shows the shortest. A repo with no release files and no packages shows "-".
 
+## Weekly flow
+
+What got done across the whole estate each week, stored as `weekly` in `data/dashboard.json` and shown as cards on the dashboard's Overview. One row per week (Monday to Sunday, UTC), 12 weeks, the newest being the week in progress (`partial: true`):
+
+| Field | Meaning | Source |
+|---|---|---|
+| `prsMerged` | PRs merged in the week, in active (not archived) repos of every owner | GitHub search, `is:pr is:merged merged:<week>` |
+| `botPrsMerged` | Of those, merged from Renovate or Dependabot | The same search with `author:app/renovate` and `author:app/dependabot` |
+| `issuesClosed` | Issues closed in the week | `is:issue is:closed closed:<week>` |
+| `issuesOpened` | Issues opened in the week | `is:issue created:<week>` |
+
+Search counts by date, so the first run backfills all 12 weeks (about 5 searches per owner per week; search allows 30 a minute, so the first run takes several minutes). After that each run fetches only the two newest weeks and carries the rest forward. A count that can't be read is `null`, shows as "?" and is named under "Couldn't check"; a good value from an earlier run is kept rather than replaced by a gap. Turn it off with `"weekly": { "enabled": false }` in `radar.config.json`, or change the number of weeks with `"weekly": { "weeks": 8 }`.
+
+The health cards come from the daily `history` totals, which now also carry `renovateOnly` (repos whose only update bot is Renovate) and `prAgeMedian` (median age in days of open, non-draft people's PRs; `null` when there are none).
+
 ## Auth in one picture
 
 ```
