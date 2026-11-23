@@ -403,3 +403,55 @@ test("metric gaps are named, never hidden", () => {
   const lines = metricGapLines({ loc: new Set(["octo-user/b", "octo-user/a"]), forks: new Set() });
   assert.deepEqual(lines, ["Metrics: lines of code not read for 2 repos: octo-user/a, octo-user/b."]);
 });
+
+import { weekStarts, weeklyFlow, WEEKLY_FIELDS } from "../scripts/radar.mjs";
+
+test("weekStarts gives Mondays, oldest first, ending with the week that holds today", () => {
+  assert.deepEqual(weekStarts("2026-11-23", 3), ["2026-11-09", "2026-11-16", "2026-11-23"]);
+  assert.deepEqual(weekStarts("2026-11-29", 2), ["2026-11-16", "2026-11-23"]); // a Sunday is still that week
+  assert.equal(weekStarts("2026-11-23", 12).length, 12);
+});
+
+test("weeklyFlow backfills every week, then only refetches the newest two", async () => {
+  const calls = [];
+  const search = async (q, o) => { calls.push(q); return 2; };
+  const first = await weeklyFlow({ owners: ["octo-user", "octo-org"], today: "2026-11-23", weeks: 4, search });
+  assert.equal(first.weekly.length, 4);
+  assert.equal(first.weekly.at(-1).partial, true);
+  assert.equal(first.weekly[0].partial, false);
+  // prsMerged: 2 owners x 2 per query; botPrsMerged: 2 queries x 2 owners x 2
+  assert.equal(first.weekly[0].prsMerged, 4);
+  assert.equal(first.weekly[0].botPrsMerged, 8);
+  assert.equal(first.gaps.size, 0);
+  assert.ok(calls.every((q) => /archived:false/.test(q)), "archived repos stay out of the flow");
+  assert.ok(calls.some((q) => /author:app\/renovate/.test(q)) && calls.some((q) => /author:app\/dependabot/.test(q)));
+  calls.length = 0;
+  const next = await weeklyFlow({ owners: ["octo-user"], today: "2026-11-24", weeks: 4, prev: first.weekly, search });
+  // two weeks refreshed (newest two), two carried forward: 2 weeks x 5 queries x 1 owner
+  assert.equal(calls.length, 10);
+  assert.equal(next.weekly[0].prsMerged, 4, "an old week is carried forward untouched");
+});
+
+test("weeklyFlow shows an unreadable count as null, never 0, and keeps the last good value", async () => {
+  const flaky = async (q) => (/is:issue is:closed/.test(q) ? null : 3);
+  const res = await weeklyFlow({ owners: ["octo-user"], today: "2026-11-23", weeks: 2, search: flaky });
+  assert.equal(res.weekly[0].issuesClosed, null);
+  assert.equal(res.weekly[0].prsMerged, 3);
+  assert.deepEqual([...res.gaps], ["issuesClosed"]);
+  const again = await weeklyFlow({ owners: ["octo-user"], today: "2026-11-23", weeks: 2, prev: [{ week: "2026-11-16", prsMerged: 9, botPrsMerged: 1, issuesClosed: 5, issuesOpened: 1 }], search: flaky });
+  assert.equal(again.weekly[0].issuesClosed, 5, "the earlier good value survives a failed re-read");
+  assert.ok(WEEKLY_FIELDS.includes("issuesOpened"));
+});
+
+test("dashboard carries the weekly series and the new health totals", () => {
+  const repos = [
+    repo({ name: "a", updates: { tools: ["renovate"], configured: true }, prs: [{ number: 1, title: "t", url: "u", draft: false, bot: false, author: "x", created: iso(10), updated: iso(1) }] }),
+    repo({ name: "b", updates: { tools: ["renovate", "dependabot"], configured: true } }),
+  ];
+  const weekly = [{ week: "2026-11-16", prsMerged: 3, botPrsMerged: 1, issuesClosed: 2, issuesOpened: 4, partial: false }];
+  const d = dashboard(repos, analyse(repos, null), { weekly });
+  assert.deepEqual(d.weekly, weekly);
+  assert.equal(d.totals.renovateOnly, 1);
+  assert.ok([9, 10].includes(d.totals.prAgeMedian), "median age of the one open people PR, in days");
+  assert.equal(dashboard([repo()], analyse([repo()], null), {}).totals.prAgeMedian, null, "no open PRs means unknown, not 0");
+});

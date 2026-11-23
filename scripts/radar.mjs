@@ -685,6 +685,54 @@ function searchTotal(q, owner) {
   return run.then((d) => (d?.total_count ?? null), () => null);
 }
 
+// ---------- Weekly flow ----------
+// What got done each week across the whole estate: PRs merged (and how many of those were Renovate or Dependabot),
+// issues closed and issues opened. GitHub search can count by date, so the first run backfills `weeks` weeks and the
+// dashboard's sparklines are full on day one. Weeks are Monday to Sunday in UTC; the newest is the week in progress
+// (`partial`). An unreadable count is null, never 0. Turn it off with "weekly": { "enabled": false }.
+const WEEKLY = { enabled: true, weeks: 12, ...(cfg.weekly ?? {}) };
+const ymd = (d) => d.toISOString().slice(0, 10);
+export function weekStarts(todayIso, n) {
+  const t = new Date(`${todayIso.slice(0, 10)}T00:00:00Z`);
+  const monday = new Date(t.getTime() - ((t.getUTCDay() + 6) % 7) * 86400e3);
+  return Array.from({ length: n }, (_, i) => ymd(new Date(monday.getTime() - (n - 1 - i) * 7 * 86400e3)));
+}
+const WEEKLY_QUERIES = {
+  prsMerged: (o, r) => [`user:${o} archived:false is:pr is:merged merged:${r}`],
+  botPrsMerged: (o, r) => [`user:${o} archived:false is:pr is:merged author:app/renovate merged:${r}`, `user:${o} archived:false is:pr is:merged author:app/dependabot merged:${r}`],
+  issuesClosed: (o, r) => [`user:${o} archived:false is:issue is:closed closed:${r}`],
+  issuesOpened: (o, r) => [`user:${o} archived:false is:issue created:${r}`],
+};
+export const WEEKLY_FIELDS = Object.keys(WEEKLY_QUERIES);
+// Fetch only the weeks that are missing, plus the two newest (the week in progress and the one before it, which can
+// still gain late merges). Everything else is carried forward from the previous file.
+export async function weeklyFlow({ owners, today, weeks = 12, prev = [], search }) {
+  const starts = weekStarts(today, weeks);
+  const old = new Map((prev ?? []).map((w) => [w.week, w]));
+  const gaps = new Set();
+  const out = [];
+  for (const [i, week] of starts.entries()) {
+    const refresh = i >= starts.length - 2;
+    const have = old.get(week);
+    const complete = have && WEEKLY_FIELDS.every((f) => have[f] != null);
+    const partial = i === starts.length - 1;
+    if (have && complete && !refresh) { out.push({ ...have, partial }); continue; }
+    const end = ymd(new Date(new Date(`${week}T00:00:00Z`).getTime() + 6 * 86400e3));
+    const range = `${week}..${end}`;
+    const row = { week, partial };
+    for (const f of WEEKLY_FIELDS) {
+      let total = 0, bad = false;
+      for (const o of owners) for (const q of WEEKLY_QUERIES[f](o, range)) {
+        const n = await search(q, o);
+        if (n == null) { bad = true; gaps.add(f); } else total += n;
+      }
+      row[f] = bad ? (have?.[f] ?? null) : total;
+    }
+    out.push(row);
+  }
+  return { weekly: out, gaps };
+}
+
 // ---------- Analyse ----------
 const SEV_RANK = { critical: 4, high: 3, medium: 2, moderate: 2, low: 1, note: 0, warning: 1, error: 3, unknown: 0 };
 const days = (iso) => Math.floor((now - new Date(iso)) / 86400e3);
@@ -813,6 +861,7 @@ export function noiseOf(repos) {
 // data/dashboard.json: a compact, stable shape for the dashboard artifact. It carries its own history
 // (one totals row per day, newest last, at most HISTORY_DAYS) forward from the previous file.
 const HISTORY_DAYS = 60;
+const medianAge = (ages) => { if (!ages.length) return null; const s = [...ages].sort((a, b) => a - b), m = s.length >> 1; return s.length % 2 ? s[m] : Math.round((s[m - 1] + s[m]) / 2); };
 export function totalsOf(repos, noiseCount = 0) {
   const sum = (f) => repos.reduce((n, r) => n + f(r), 0);
   return {
@@ -825,6 +874,8 @@ export function totalsOf(repos, noiseCount = 0) {
     failing: repos.filter((r) => r.failingWorkflows.length).length,
     noAgents: repos.filter((r) => r.hasAgents === false).length,
     stale: repos.filter((r) => days(r.pushedAt) > cfg.staleDays).length,
+    renovateOnly: repos.filter((r) => r.updates?.tools?.includes("renovate") && !r.updates.tools.includes("dependabot")).length,
+    prAgeMedian: medianAge(repos.flatMap((r) => r.prs.filter((p) => !p.bot && !p.draft).map((p) => days(p.created)))),
     noise: noiseCount,
   };
 }
@@ -845,7 +896,7 @@ export function priorityOf(r) {
   return { score: 3, level: "ok" };
 }
 
-export function dashboard(repos, a, { generated = now.toISOString(), warnings: warn = [], projects: proj = [], prev = null, seed = null } = {}) {
+export function dashboard(repos, a, { generated = now.toISOString(), warnings: warn = [], projects: proj = [], prev = null, seed = null, weekly = null } = {}) {
   const totals = totalsOf(repos, a.noise?.length ?? 0);
   const date = generated.slice(0, 10);
   let history = prev?.history ?? [];
@@ -854,7 +905,7 @@ export function dashboard(repos, a, { generated = now.toISOString(), warnings: w
   const prevScore = new Map((prev?.repos ?? []).map((r) => [r.fullName, r.score]));
   const goalsOf = (r) => Object.entries(cfg.goalRepos ?? {}).filter(([, ns]) => ns.some((n) => [r.name.toLowerCase(), r.name.split("/").pop().toLowerCase()].includes(n.toLowerCase()))).map(([g]) => g);
   return {
-    schema: 1, engine: ENGINE_VERSION, generated, owner: cfg.owner, staleDays: cfg.staleDays, totals, history,
+    schema: 1, engine: ENGINE_VERSION, generated, owner: cfg.owner, staleDays: cfg.staleDays, totals, history, weekly,
     repos: repos.map((r) => {
       const { score, level } = priorityOf(r);
       const bots = r.prs.filter((p) => p.bot);
@@ -988,6 +1039,16 @@ for (let i = 0; i < repos.length; i += 6) {
 }
 for (const line of [...gapLines(gaps), ...metricGapLines(metricGaps)]) warnings.add(line);
 const proj = await projects();
+const dashPath = join(root, "data", "dashboard.json");
+const prevDash = existsSync(dashPath) ? JSON.parse(readFileSync(dashPath, "utf8")) : null;
+let weekly = prevDash?.weekly ?? null;
+if (WEEKLY.enabled && OWNERS.length) {
+  try {
+    const res = await weeklyFlow({ owners: OWNERS, today, weeks: WEEKLY.weeks, prev: prevDash?.weekly, search: searchTotal });
+    weekly = res.weekly;
+    if (res.gaps.size) warnings.add(`Weekly flow: couldn't read ${[...res.gaps].join(", ")} for some weeks, so those show as "?" (search is rate limited or an owner isn't readable).`);
+  } catch (e) { warnings.add(`Weekly flow: couldn't be read (${e.message}).`); }
+}
 const active = collected.filter((r) => r.kind === "active");
 const noise = collected.filter((r) => r.kind !== "active");
 const analysis = analyse(active, prev, noise);
@@ -1000,9 +1061,7 @@ writeFileSync(join(root, "reports", "latest.md"), md);
 const snapshot = { generated: now.toISOString(), owner: cfg.owner, repos: active, noise, projects: proj ?? null, warnings: [...warnings] };
 writeFileSync(join(root, "data", `${today}.json`), JSON.stringify(snapshot, null, 2));
 writeFileSync(prevPath, JSON.stringify(snapshot, null, 2));
-const dashPath = join(root, "data", "dashboard.json");
-const prevDash = existsSync(dashPath) ? JSON.parse(readFileSync(dashPath, "utf8")) : null;
-writeFileSync(dashPath, JSON.stringify(dashboard(active, analysis, { generated: now.toISOString(), warnings: [...warnings], projects: proj, prev: prevDash, seed: prev })));
+writeFileSync(dashPath, JSON.stringify(dashboard(active, analysis, { generated: now.toISOString(), warnings: [...warnings], projects: proj, prev: prevDash, seed: prev, weekly })));
 console.log(`Radar: ${active.length} active repos, ${noise.length} archived or forked, ${analysis.needs.length} need attention.`);
 }
 
