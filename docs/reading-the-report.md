@@ -70,7 +70,9 @@ Open org Projects, with item counts by Status and when each was last updated.
 Anything the radar couldn't read, and why. Typical entries:
 
 - *Not checked: <owner>. The GitHub App isn't installed there yet.* Install it (see [Setup](setup.md)).
-- *Code scanning (or secret scanning, or Dependabot alerts) not readable for N repos: …* The repos are named. Usually the feature is simply off: code and secret scanning on private repos need GitHub Advanced Security. Switch it on in the repo's Security settings if you want it. If it's on, the app is missing that read permission.
+- *Turned off: Dependabot alerts (or secret scanning) in N repos (P public, Q private): …* GitHub said the feature is off for those repos, so nothing is watching them. Dependabot alerts are free: turn them on per repo with `gh api -X PUT repos/<owner>/<repo>/vulnerability-alerts`, or with the dashboard's copy button. Secret scanning is free on public repos; private ones need GitHub Secret Protection.
+- *Not set up: code scanning in N repos: …* Public repos can use free CodeQL default setup, which runs in Actions on each push; private repos need GitHub Code Security. Leaving it off is a fair choice; the line is there so it's a decision, not an accident.
+- *Code scanning (or secret scanning, or Dependabot alerts) not readable for N repos: …* GitHub refused the app for another reason. Check the app has that read permission and that the install accepted it.
 - *Metrics: <metric> not read for N repos: …* That number shows as "?" in section 7. A registry being down shows up here too, as download counts.
 - *GitHub Projects not read for <owner>.* The app needs Organization → Projects: read, or the org hasn't approved the updated permissions.
 

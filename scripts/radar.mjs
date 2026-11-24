@@ -39,12 +39,15 @@ const since = new Date(now.getTime() - cfg.lookbackHours * 3600e3);
 const warnings = new Set();
 // Per-repo gaps, so "Couldn't check" can name the repos instead of saying "some repos".
 const gaps = { unreadable: new Set(), dependabot: new Set(), codeScanning: new Set(), secretScanning: new Set() };
+// Security features GitHub says are switched off (or never set up) for a repo: repo full name -> private. These aren't
+// read failures, but nothing is watching those repos, so they get their own "turned off" lines and a command to fix.
+const off = { dependabot: new Map(), codeScanning: new Map(), secretScanning: new Map() };
 export const plural = (n, word, many = `${word}s`) => `${n} ${n === 1 ? word : many}`;
 const GAP_TEXT = {
   unreadable: ["couldn't be read at all, so their rows show nothing", "Usually the app isn't installed on them, or lacks Contents: read."],
-  dependabot: ["Dependabot alerts not readable", "Usually Dependabot alerts are off for them; otherwise the app lacks Dependabot alerts: read."],
-  codeScanning: ["code scanning not readable", "Usually code scanning isn't set up (private repos need GitHub Advanced Security); otherwise the app lacks Code scanning alerts: read."],
-  secretScanning: ["secret scanning not readable", "Usually secret scanning is off (private repos need GitHub Advanced Security); otherwise the app lacks Secret scanning alerts: read."],
+  dependabot: ["Dependabot alerts not readable", "GitHub refused the app (not because they're off); check the app has Dependabot alerts: read and is installed on them."],
+  codeScanning: ["code scanning not readable", "GitHub refused the app (not because it isn't set up); check the app has Code scanning alerts: read."],
+  secretScanning: ["secret scanning not readable", "GitHub refused the app (not because it's off); check the app has Secret scanning alerts: read."],
 };
 export function gapLines(g, max = 8) {
   return Object.entries(GAP_TEXT).filter(([k]) => g[k]?.size).map(([k, [what, why]]) => {
@@ -52,6 +55,62 @@ export function gapLines(g, max = 8) {
     const list = names.slice(0, max).join(", ") + (names.length > max ? ` and ${names.length - max} more` : "");
     return k === "unreadable" ? `${plural(names.length, "repo")} ${what}: ${list}. ${why}` : `${what[0].toUpperCase()}${what.slice(1)} for ${plural(names.length, "repo")}: ${list}. ${why}`;
   });
+}
+
+// Why GitHub refused an alerts read: "off" when the feature is switched off or not set up for that repo, "unread" when
+// the app itself was refused (missing permission, not installed) or the reason is unclear. A refusal is never a zero.
+export function refusalKind(feature, { status, message } = {}) {
+  const m = String(message ?? "");
+  if (/not accessible by integration|must have admin|bad credentials|requires authentication/i.test(m)) return "unread";
+  if (feature === "dependabot") return status === 403 && /disabled/i.test(m) ? "off" : "unread";
+  if (feature === "codeScanning") return status === 404 || (status === 403 && /advanced security|not enabled|disabled|no analysis/i.test(m)) ? "off" : "unread";
+  if (feature === "secretScanning") return status === 404 || (status === 403 && /advanced security|not enabled|disabled/i.test(m)) ? "off" : "unread";
+  return "unread";
+}
+const OFF_TEXT = {
+  dependabot: ["Turned off: Dependabot alerts", "They're free; turn them on from the dashboard (Couldn't check), or per repo with `gh api -X PUT repos/<owner>/<repo>/vulnerability-alerts`."],
+  secretScanning: ["Turned off: secret scanning", "Free on public repos (with push protection); private repos need GitHub Secret Protection."],
+  codeScanning: ["Not set up: code scanning", "Public repos can use free CodeQL default setup (it runs in Actions on each push); private repos need GitHub Code Security."],
+};
+export function offLines(o, max = 8) {
+  return Object.entries(OFF_TEXT).filter(([k]) => o[k]?.size).map(([k, [what, why]]) => {
+    const names = [...o[k].keys()].sort();
+    const priv = [...o[k].values()].filter(Boolean).length;
+    const split = priv && priv < names.length ? ` (${names.length - priv} public, ${priv} private)` : priv ? " (all private)" : " (all public)";
+    const list = names.slice(0, max).join(", ") + (names.length > max ? ` and ${names.length - max} more` : "");
+    return `${what} in ${plural(names.length, "repo")}${split}: ${list}. ${why}`;
+  });
+}
+export const coverageOf = (o) => Object.fromEntries(Object.keys(OFF_TEXT).map((k) => [k, [...(o[k] ?? new Map()).entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([repo, priv]) => ({ repo, private: !!priv }))]));
+
+// Advisory detail per vulnerable package, so a sweep can work from the radar's read instead of calling the alerts API
+// itself (the app that opens PRs may not be allowed to read alerts). fixedIn is the highest first-patched version
+// across that package's open alerts; noFix lists advisories with no patched release yet.
+export function compareVersions(a, b) {
+  const pa = String(a).replace(/^v/, "").split(/[.\-+]/), pb = String(b).replace(/^v/, "").split(/[.\-+]/);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = pa[i] ?? "0", y = pb[i] ?? "0";
+    const nx = /^\d+$/.test(x), ny = /^\d+$/.test(y);
+    const c = nx && ny ? Number(x) - Number(y) : nx ? 1 : ny ? -1 : x.localeCompare(y);
+    if (c) return c;
+  }
+  return 0;
+}
+export function advisoriesOf(alerts = []) {
+  const by = new Map();
+  for (const a of alerts) {
+    if (!a?.pkg) continue;
+    const k = `${a.ecosystem}:${a.pkg}`;
+    if (!by.has(k)) by.set(k, { pkg: a.pkg, ecosystem: a.ecosystem, severity: "unknown", fixedIn: null, noFix: [], ghsa: [], ranges: [], manifests: [] });
+    const e = by.get(k);
+    if ((SEV_RANK[a.severity] ?? 0) > (SEV_RANK[e.severity] ?? 0)) e.severity = a.severity;
+    if (a.ghsa && !e.ghsa.includes(a.ghsa)) e.ghsa.push(a.ghsa);
+    if (a.range && !e.ranges.includes(a.range)) e.ranges.push(a.range);
+    if (a.manifest && !e.manifests.includes(a.manifest)) e.manifests.push(a.manifest);
+    if (a.patched) { if (!e.fixedIn || compareVersions(a.patched, e.fixedIn) > 0) e.fixedIn = a.patched; }
+    else if (a.ghsa && !e.noFix.includes(a.ghsa)) e.noFix.push(a.ghsa);
+  }
+  return [...by.values()].sort((x, y) => (SEV_RANK[y.severity] ?? 0) - (SEV_RANK[x.severity] ?? 0) || x.pkg.localeCompare(y.pkg));
 }
 
 // repositoryOwner works for a user or an org login, so a team whose owner is its org reads fine.
@@ -62,7 +121,7 @@ const OWNERS = [...(cfg.owners ?? [cfg.owner]), ...(cfg.clientOwners ?? [])];
 // Returns the parsed body. With { withNext: true } returns { data, next }, where next is the Link header's
 // rel="next" path. GitHub's alert endpoints only support Link (cursor) paging, not ?page=N.
 // With { withLink: true } returns { data, link }, the raw Link header (used to read a count from rel="last").
-async function api(path, { optional = false, owner, withNext = false, withLink = false } = {}) {
+async function api(path, { optional = false, owner, withNext = false, withLink = false, onRefuse } = {}) {
   try {
     if (USE_GH && withLink) {
       const out = execFileSync("gh", ["api", "-i", "-H", "Accept: application/vnd.github+json", path], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 });
@@ -90,6 +149,7 @@ async function api(path, { optional = false, owner, withNext = false, withLink =
     if (!res.ok) {
       const err = new Error(`${res.status} ${path}`);
       err.status = res.status;
+      err.ghMessage = await res.text().then((t) => { try { return JSON.parse(t).message ?? t; } catch { return t; } }, () => "");
       throw err;
     }
     const data = await res.json();
@@ -99,20 +159,23 @@ async function api(path, { optional = false, owner, withNext = false, withLink =
     return { data, next };
   } catch (e) {
     const status = USE_GH ? Number(/HTTP (\d{3})/.exec(String(e.stderr || e.message))?.[1] ?? 0) : e.status;
-    if (optional && [403, 404, 409, 410, 422].includes(Number(status))) return undefined;
+    if (optional && [403, 404, 409, 410, 422].includes(Number(status))) {
+      onRefuse?.({ status: Number(status), message: USE_GH ? String(e.stderr || e.message) : e.ghMessage ?? "" });
+      return undefined;
+    }
     throw e;
   }
 }
 
 // Follows Link rel="next", which works for every list endpoint (page- or cursor-based).
 export const itemsOf = (batch) => (Array.isArray(batch) ? batch : batch?.items ?? batch?.repositories ?? []);
-export async function paged(path, max = 500, owner) {
+export async function paged(path, max = 500, owner, onRefuse) {
   // Next links can point at /repositories/<id>/…, which names no owner, so pin the owner from the first path.
   owner ??= ownerOf(path);
   const all = [];
   let next = `${path}${path.includes("?") ? "&" : "?"}per_page=100`;
   while (next && all.length < max) {
-    const res = await api(next, { optional: true, owner, withNext: true });
+    const res = await api(next, { optional: true, owner, withNext: true, onRefuse });
     if (res === undefined) return undefined;
     all.push(...itemsOf(res.data));
     next = res.next;
@@ -244,13 +307,14 @@ export function detectUpdaters({ rootFiles = [], githubFiles = [], prs = [], iss
 async function collect(r) {
   const full = r.full_name;
   const branch = r.default_branch;
+  const why = {};
   const [pulls, issues, runs, dependabot, codeScan, secretScan, releases, agents, rootDir, ghDir, detail] = await Promise.all([
     paged(`/repos/${full}/pulls?state=open`),
     paged(`/repos/${full}/issues?state=open`),
     api(`/repos/${full}/actions/runs?branch=${encodeURIComponent(branch)}&per_page=10&exclude_pull_requests=true`, { optional: true }),
-    paged(`/repos/${full}/dependabot/alerts?state=open`),
-    paged(`/repos/${full}/code-scanning/alerts?state=open`),
-    paged(`/repos/${full}/secret-scanning/alerts?state=open`),
+    paged(`/repos/${full}/dependabot/alerts?state=open`, 500, undefined, (w) => (why.dependabot = w)),
+    paged(`/repos/${full}/code-scanning/alerts?state=open`, 500, undefined, (w) => (why.codeScanning = w)),
+    paged(`/repos/${full}/secret-scanning/alerts?state=open`, 500, undefined, (w) => (why.secretScanning = w)),
     paged(`/repos/${full}/releases`, 1000), // all releases: the latest, and asset download counts for metrics
     api(`/repos/${full}/contents/AGENTS.md`, { optional: true }),
     api(`/repos/${full}/contents`, { optional: true }),
@@ -259,9 +323,11 @@ async function collect(r) {
   ]);
   const readable = pulls !== undefined;
   if (!readable) gaps.unreadable.add(full);
-  if (dependabot === undefined) gaps.dependabot.add(full);
-  if (codeScan === undefined) gaps.codeScanning.add(full);
-  if (secretScan === undefined) gaps.secretScanning.add(full);
+  for (const [k, v] of [["dependabot", dependabot], ["codeScanning", codeScan], ["secretScanning", secretScan]]) {
+    if (v !== undefined || !readable) continue;
+    // Archived repos and forks with a feature off aren't worth a line: nothing is being built there.
+    if (refusalKind(k, why[k]) === "off") { if ((r.kind ?? "active") === "active") off[k].set(full, !!r.private); } else gaps[k].add(full);
+  }
 
   // Latest completed run per workflow on the default branch
   const latestByWf = new Map();
@@ -312,7 +378,8 @@ async function collect(r) {
     readable, hasAgents: readable ? !!agents : null, latestRelease: release ? { tag: release.tag_name, published: release.published_at, url: release.html_url } : null,
     prs, issues: realIssues, updates, metrics,
     failingWorkflows: failing.map((x) => ({ name: x.name, url: x.html_url, at: x.updated_at })),
-    dependabot: (dependabot ?? []).map((a) => ({ id: a.number, severity: sev(a), pkg: a.dependency?.package?.name, ecosystem: a.dependency?.package?.ecosystem, ghsa: a.security_advisory?.ghsa_id, summary: a.security_advisory?.summary, url: a.html_url })),
+    dependabot: (dependabot ?? []).map((a) => ({ id: a.number, severity: sev(a), pkg: a.dependency?.package?.name, ecosystem: a.dependency?.package?.ecosystem, ghsa: a.security_advisory?.ghsa_id, summary: a.security_advisory?.summary, url: a.html_url,
+      range: a.security_vulnerability?.vulnerable_version_range ?? null, patched: a.security_vulnerability?.first_patched_version?.identifier ?? null, manifest: a.dependency?.manifest_path ?? null })),
     codeScanning: (codeScan ?? []).map((a) => ({ id: a.number, severity: sev(a), rule: a.rule?.id, url: a.html_url })),
     secretScanning: (secretScan ?? []).map((a) => ({ id: a.number, type: a.secret_type_display_name || a.secret_type, url: a.html_url })),
   };
@@ -904,7 +971,7 @@ export function priorityOf(r) {
   return { score: 3, level: "ok" };
 }
 
-export function dashboard(repos, a, { generated = now.toISOString(), warnings: warn = [], projects: proj = [], prev = null, seed = null, weekly = null } = {}) {
+export function dashboard(repos, a, { generated = now.toISOString(), warnings: warn = [], projects: proj = [], prev = null, seed = null, weekly = null, coverage = null } = {}) {
   const totals = totalsOf(repos, a.noise?.length ?? 0);
   const date = generated.slice(0, 10);
   let history = prev?.history ?? [];
@@ -928,6 +995,7 @@ export function dashboard(repos, a, { generated = now.toISOString(), warnings: w
           critHigh: [...r.dependabot, ...r.codeScanning].filter((x) => SEV_RANK[x.severity] >= 3).length,
           total: r.dependabot.length + r.codeScanning.length,
           packages: [...new Set(r.dependabot.filter((x) => SEV_RANK[x.severity] >= 3).map((x) => x.pkg))].slice(0, 12),
+          advisories: advisoriesOf(r.dependabot),
         },
         failing: r.failingWorkflows,
         humanPrs: r.prs.filter((p) => !p.bot).map((p) => ({ number: p.number, title: p.title, url: p.url, draft: p.draft, author: p.author, created: p.created, updated: p.updated, headSha: p.headSha ?? null, checks: p.checks ?? null })),
@@ -944,6 +1012,7 @@ export function dashboard(repos, a, { generated = now.toISOString(), warnings: w
     goals: Object.entries(cfg.goalRepos ?? {}).map(([goal, names]) => ({ goal, repos: names })),
     noise: a.noise ?? [],
     projects: proj ?? [],
+    coverage,
     warnings: warn,
   };
 }
@@ -1045,7 +1114,7 @@ for (let i = 0; i < repos.length; i += 6) {
     return null;
   })))).filter(Boolean));
 }
-for (const line of [...gapLines(gaps), ...metricGapLines(metricGaps)]) warnings.add(line);
+for (const line of [...gapLines(gaps), ...offLines(off), ...metricGapLines(metricGaps)]) warnings.add(line);
 const proj = await projects();
 const dashPath = join(root, "data", "dashboard.json");
 const prevDash = existsSync(dashPath) ? JSON.parse(readFileSync(dashPath, "utf8")) : null;
@@ -1070,7 +1139,7 @@ writeFileSync(join(root, "reports", "latest.md"), md);
 const snapshot = { generated: now.toISOString(), owner: cfg.owner, repos: active, noise, projects: proj ?? null, warnings: [...warnings] };
 writeFileSync(join(root, "data", `${today}.json`), JSON.stringify(snapshot, null, 2));
 writeFileSync(prevPath, JSON.stringify(snapshot, null, 2));
-writeFileSync(dashPath, JSON.stringify(dashboard(active, analysis, { generated: now.toISOString(), warnings: [...warnings], projects: proj, prev: prevDash, seed: prev, weekly })));
+writeFileSync(dashPath, JSON.stringify(dashboard(active, analysis, { generated: now.toISOString(), warnings: [...warnings], projects: proj, prev: prevDash, seed: prev, weekly, coverage: coverageOf(off) })));
 console.log(`Radar: ${active.length} active repos, ${noise.length} archived or forked, ${analysis.needs.length} need attention.`);
 }
 

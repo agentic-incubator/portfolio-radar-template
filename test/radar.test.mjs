@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { analyse, render, envName, updaterOf, detectUpdaters, kindOf, checksState, noiseOf, dashboard, priorityOf, plural, gapLines, PROJECTS_QUERY, ENGINE_VERSION } from "../scripts/radar.mjs";
+import { analyse, render, envName, updaterOf, detectUpdaters, kindOf, checksState, noiseOf, dashboard, priorityOf, plural, gapLines, offLines, coverageOf, refusalKind, advisoriesOf, compareVersions, PROJECTS_QUERY, ENGINE_VERSION } from "../scripts/radar.mjs";
 
 const iso = (daysAgo) => new Date(Date.now() - daysAgo * 86400e3).toISOString();
 const repo = (over = {}) => ({
@@ -256,11 +256,51 @@ test("the goals section is never blank: it says no goals are set, or lists each 
 test("Couldn't check names the repos and says why, instead of 'some repos'", () => {
   const lines = gapLines({ unreadable: new Set(), dependabot: new Set(["o/b", "o/a"]), codeScanning: new Set(["o/a"]), secretScanning: new Set() });
   assert.equal(lines.length, 2);
-  assert.match(lines[0], /^Dependabot alerts not readable for 2 repos: o\/a, o\/b\. Usually/);
-  assert.match(lines[1], /^Code scanning not readable for 1 repo: o\/a\..*Advanced Security/);
+  assert.match(lines[0], /^Dependabot alerts not readable for 2 repos: o\/a, o\/b\. GitHub refused the app/);
+  assert.match(lines[1], /^Code scanning not readable for 1 repo: o\/a\..*Code scanning alerts: read/);
   const many = gapLines({ secretScanning: new Set(Array.from({ length: 10 }, (_, i) => `o/r${i}`)) }, 3);
   assert.match(many[0], /o\/r0, o\/r1, o\/r2 and 7 more\./);
   assert.ok(!lines.join(" ").includes("Some repos"));
+});
+
+test("a refusal because a feature is off is told apart from the app being refused", () => {
+  assert.equal(refusalKind("dependabot", { status: 403, message: "Dependabot alerts are disabled for this repository." }), "off");
+  assert.equal(refusalKind("dependabot", { status: 403, message: "Resource not accessible by integration" }), "unread");
+  assert.equal(refusalKind("dependabot", { status: 404, message: "Not Found" }), "unread");
+  assert.equal(refusalKind("codeScanning", { status: 404, message: "no analysis found" }), "off");
+  assert.equal(refusalKind("codeScanning", { status: 403, message: "Advanced Security must be enabled for this repository to use code scanning." }), "off");
+  assert.equal(refusalKind("secretScanning", { status: 404, message: "Secret scanning is disabled on this repository." }), "off");
+  assert.equal(refusalKind("secretScanning", { status: 403, message: "Resource not accessible by integration" }), "unread");
+  assert.equal(refusalKind("secretScanning", undefined), "unread", "no reason recorded stays a gap");
+});
+
+test("turned-off features get their own lines, split public and private, and a coverage list", () => {
+  const o = { dependabot: new Map([["o/b", false], ["o/a", true]]), secretScanning: new Map([["o/a", true]]), codeScanning: new Map() };
+  const lines = offLines(o);
+  assert.equal(lines.length, 2);
+  assert.match(lines[0], /^Turned off: Dependabot alerts in 2 repos \(1 public, 1 private\): o\/a, o\/b\. .*vulnerability-alerts/);
+  assert.match(lines[1], /^Turned off: secret scanning in 1 repo \(all private\)/);
+  const cov = coverageOf(o);
+  assert.deepEqual(cov.dependabot, [{ repo: "o/a", private: true }, { repo: "o/b", private: false }]);
+  assert.deepEqual(cov.codeScanning, []);
+});
+
+test("advisoriesOf groups alerts per package with the version that fixes them all", () => {
+  assert.ok(compareVersions("1.10.0", "1.9.3") > 0);
+  assert.ok(compareVersions("v2.0.0", "2.0.0") === 0);
+  assert.ok(compareVersions("33.0.0-jre", "32.1.3-jre") > 0);
+  const adv = advisoriesOf([
+    { pkg: "vite", ecosystem: "npm", severity: "medium", ghsa: "GHSA-1", range: "< 6.1.2", patched: "6.1.2", manifest: "package-lock.json" },
+    { pkg: "vite", ecosystem: "npm", severity: "high", ghsa: "GHSA-2", range: ">= 6.0.0, < 6.1.10", patched: "6.1.10", manifest: "package-lock.json" },
+    { pkg: "left-pad", ecosystem: "npm", severity: "low", ghsa: "GHSA-3", range: "<= 1.3.0", patched: null, manifest: "web/package.json" },
+  ]);
+  assert.equal(adv[0].pkg, "vite");
+  assert.equal(adv[0].severity, "high");
+  assert.equal(adv[0].fixedIn, "6.1.10", "the highest first-patched version clears every advisory");
+  assert.deepEqual(adv[0].ghsa, ["GHSA-1", "GHSA-2"]);
+  assert.deepEqual(adv[0].manifests, ["package-lock.json"]);
+  assert.equal(adv[1].fixedIn, null);
+  assert.deepEqual(adv[1].noFix, ["GHSA-3"], "an advisory with no patched release is named, not guessed");
 });
 
 test("Projects are read through repositoryOwner, so an org as owner works", () => {
