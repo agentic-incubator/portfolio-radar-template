@@ -690,6 +690,8 @@ function searchTotal(q, owner) {
 // issues closed and issues opened. GitHub search can count by date, so the first run backfills `weeks` weeks and the
 // dashboard's sparklines are full on day one. Weeks are Monday to Sunday in UTC; the newest is the week in progress
 // (`partial`). An unreadable count is null, never 0. Turn it off with "weekly": { "enabled": false }.
+// Only owners the radar can read are counted (an owner where the app isn't installed has no token, and one such owner
+// used to blank every count). Each row records which owners it counts, so a week is refetched once an owner is added.
 const WEEKLY = { enabled: true, weeks: 12, ...(cfg.weekly ?? {}) };
 const ymd = (d) => d.toISOString().slice(0, 10);
 export function weekStarts(todayIso, n) {
@@ -706,31 +708,37 @@ const WEEKLY_QUERIES = {
 export const WEEKLY_FIELDS = Object.keys(WEEKLY_QUERIES);
 // Fetch only the weeks that are missing, plus the two newest (the week in progress and the one before it, which can
 // still gain late merges). Everything else is carried forward from the previous file.
-export async function weeklyFlow({ owners, today, weeks = 12, prev = [], search }) {
+export async function weeklyFlow({ owners, today, weeks = 12, prev = [], search, canRead = () => true }) {
   const starts = weekStarts(today, weeks);
   const old = new Map((prev ?? []).map((w) => [w.week, w]));
+  const counted = owners.filter((o) => canRead(o));
+  const skipped = owners.filter((o) => !canRead(o));
+  const key = [...counted].map((o) => o.toLowerCase()).sort().join(",");
   const gaps = new Set();
   const out = [];
+  if (!counted.length) return { weekly: (prev ?? []).length ? prev : null, gaps, skipped };
   for (const [i, week] of starts.entries()) {
     const refresh = i >= starts.length - 2;
     const have = old.get(week);
-    const complete = have && WEEKLY_FIELDS.every((f) => have[f] != null);
+    // A row counted for a different set of owners is stale; rows from before this field existed are taken as-is.
+    const sameOwners = !have?.owners || have.owners.map((o) => o.toLowerCase()).sort().join(",") === key;
+    const complete = have && sameOwners && WEEKLY_FIELDS.every((f) => have[f] != null);
     const partial = i === starts.length - 1;
     if (have && complete && !refresh) { out.push({ ...have, partial }); continue; }
     const end = ymd(new Date(new Date(`${week}T00:00:00Z`).getTime() + 6 * 86400e3));
     const range = `${week}..${end}`;
-    const row = { week, partial };
+    const row = { week, partial, owners: counted };
     for (const f of WEEKLY_FIELDS) {
       let total = 0, bad = false;
-      for (const o of owners) for (const q of WEEKLY_QUERIES[f](o, range)) {
+      for (const o of counted) for (const q of WEEKLY_QUERIES[f](o, range)) {
         const n = await search(q, o);
         if (n == null) { bad = true; gaps.add(f); } else total += n;
       }
-      row[f] = bad ? (have?.[f] ?? null) : total;
+      row[f] = bad ? (sameOwners ? have?.[f] ?? null : null) : total;
     }
     out.push(row);
   }
-  return { weekly: out, gaps };
+  return { weekly: out, gaps, skipped };
 }
 
 // ---------- Analyse ----------
@@ -1044,9 +1052,10 @@ const prevDash = existsSync(dashPath) ? JSON.parse(readFileSync(dashPath, "utf8"
 let weekly = prevDash?.weekly ?? null;
 if (WEEKLY.enabled && OWNERS.length) {
   try {
-    const res = await weeklyFlow({ owners: OWNERS, today, weeks: WEEKLY.weeks, prev: prevDash?.weekly, search: searchTotal });
+    const res = await weeklyFlow({ owners: OWNERS, today, weeks: WEEKLY.weeks, prev: prevDash?.weekly, search: searchTotal, canRead: (o) => USE_GH || !!tokenFor(o) });
     weekly = res.weekly;
-    if (res.gaps.size) warnings.add(`Weekly flow: couldn't read ${[...res.gaps].join(", ")} for some weeks, so those show as "?" (search is rate limited or an owner isn't readable).`);
+    if (res.skipped.length) warnings.add(`Weekly flow leaves out ${res.skipped.join(", ")}: the GitHub App isn't installed there, so its PRs and issues aren't counted.`);
+    if (res.gaps.size) warnings.add(`Weekly flow: GitHub search refused or failed for ${[...res.gaps].join(", ")} in some weeks (most often its 30-a-minute limit), so those show as "?".`);
   } catch (e) { warnings.add(`Weekly flow: couldn't be read (${e.message}).`); }
 }
 const active = collected.filter((r) => r.kind === "active");

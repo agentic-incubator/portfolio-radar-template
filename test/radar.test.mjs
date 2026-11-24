@@ -426,9 +426,9 @@ test("weeklyFlow backfills every week, then only refetches the newest two", asyn
   assert.ok(calls.every((q) => /archived:false/.test(q)), "archived repos stay out of the flow");
   assert.ok(calls.some((q) => /author:app\/renovate/.test(q)) && calls.some((q) => /author:app\/dependabot/.test(q)));
   calls.length = 0;
-  const next = await weeklyFlow({ owners: ["octo-user"], today: "2026-11-24", weeks: 4, prev: first.weekly, search });
-  // two weeks refreshed (newest two), two carried forward: 2 weeks x 5 queries x 1 owner
-  assert.equal(calls.length, 10);
+  const next = await weeklyFlow({ owners: ["octo-user", "octo-org"], today: "2026-11-24", weeks: 4, prev: first.weekly, search });
+  // two weeks refreshed (newest two), two carried forward: 2 weeks x 5 queries x 2 owners
+  assert.equal(calls.length, 20);
   assert.equal(next.weekly[0].prsMerged, 4, "an old week is carried forward untouched");
 });
 
@@ -441,6 +441,25 @@ test("weeklyFlow shows an unreadable count as null, never 0, and keeps the last 
   const again = await weeklyFlow({ owners: ["octo-user"], today: "2026-11-23", weeks: 2, prev: [{ week: "2026-11-16", prsMerged: 9, botPrsMerged: 1, issuesClosed: 5, issuesOpened: 1 }], search: flaky });
   assert.equal(again.weekly[0].issuesClosed, 5, "the earlier good value survives a failed re-read");
   assert.ok(WEEKLY_FIELDS.includes("issuesOpened"));
+});
+
+test("weeklyFlow counts only readable owners, names the rest, and refetches when the owners change", async () => {
+  const calls = [];
+  const search = async (q, o) => { calls.push(o); return o === "acme-client" ? null : 2; };
+  const canRead = (o) => o !== "acme-client";
+  const res = await weeklyFlow({ owners: ["octo-user", "acme-client"], today: "2026-11-23", weeks: 3, search, canRead });
+  assert.ok(!calls.includes("acme-client"), "an owner without a token is never searched");
+  assert.deepEqual(res.skipped, ["acme-client"]);
+  assert.equal(res.gaps.size, 0, "one unreadable owner no longer blanks every count");
+  assert.equal(res.weekly[0].prsMerged, 2);
+  assert.deepEqual(res.weekly[0].owners, ["octo-user"]);
+  const later = await weeklyFlow({ owners: ["octo-user", "acme-client"], today: "2026-11-23", weeks: 3, prev: res.weekly, search: async () => 5, canRead });
+  assert.equal(later.weekly[0].prsMerged, 2, "an old week stays put while the owners are the same");
+  const grown = await weeklyFlow({ owners: ["octo-user", "acme-client"], today: "2026-11-23", weeks: 3, prev: res.weekly, search: async () => 5 });
+  assert.equal(grown.weekly[0].prsMerged, 10, "once the owner is readable, the old week is counted again for both");
+  assert.deepEqual(grown.skipped, []);
+  const none = await weeklyFlow({ owners: ["acme-client"], today: "2026-11-23", weeks: 3, search, canRead });
+  assert.equal(none.weekly, null, "no readable owner means no weekly series, not a row of gaps");
 });
 
 test("dashboard carries the weekly series and the new health totals", () => {

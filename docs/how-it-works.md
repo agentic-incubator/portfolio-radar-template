@@ -73,12 +73,16 @@ What got done across the whole estate each week, stored as `weekly` in `data/das
 
 | Field | Meaning | Source |
 |---|---|---|
-| `prsMerged` | PRs merged in the week, in active (not archived) repos of every owner | GitHub search, `is:pr is:merged merged:<week>` |
+| `prsMerged` | PRs merged in the week, in active (not archived) repos of every readable owner | GitHub search, `is:pr is:merged merged:<week>` |
 | `botPrsMerged` | Of those, merged from Renovate or Dependabot | The same search with `author:app/renovate` and `author:app/dependabot` |
 | `issuesClosed` | Issues closed in the week | `is:issue is:closed closed:<week>` |
 | `issuesOpened` | Issues opened in the week | `is:issue created:<week>` |
 
-Search counts by date, so the first run backfills all 12 weeks (about 5 searches per owner per week; search allows 30 a minute, so the first run takes several minutes). After that each run fetches only the two newest weeks and carries the rest forward. A count that can't be read is `null`, shows as "?" and is named under "Couldn't check"; a good value from an earlier run is kept rather than replaced by a gap. Turn it off with `"weekly": { "enabled": false }` in `radar.config.json`, or change the number of weeks with `"weekly": { "weeks": 8 }`.
+Search counts by date, so the first run backfills all 12 weeks (about 5 searches per owner per week; search allows 30 a minute, so the first run takes several minutes). After that each run fetches only the two newest weeks and carries the rest forward. A count that can't be read is `null`, shows as "?" and is named under "Couldn't check"; a good value from an earlier run is kept rather than replaced by a gap.
+
+Only owners the radar can read are counted. An owner where the GitHub App isn't installed yet (a client org waiting on its owner, say) is left out and named under "Couldn't check", instead of turning every count into "?". Each row stores the owners it counts in `owners`; when that set changes (the app gets installed), the old weeks are fetched again so the series stays comparable. With no readable owner at all, `weekly` is `null` and the dashboard shows no flow cards.
+
+Turn it off with `"weekly": { "enabled": false }` in `radar.config.json`, or change the number of weeks with `"weekly": { "weeks": 8 }`.
 
 The health cards come from the daily `history` totals, which now also carry `renovateOnly` (repos whose only update bot is Renovate) and `prAgeMedian` (median age in days of open, non-draft people's PRs; `null` when there are none).
 
