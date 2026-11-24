@@ -146,5 +146,6 @@ Keys don't expire, but rotate one if it may have leaked:
 | "Couldn't list repos for X: GitHub refused the token" | The install is suspended, or the org blocks GitHub Apps. Check the org's GitHub Apps settings |
 | A repo you expected is missing | Install set to "Only select repositories" (add it), or it's in `ignoreRepos`. Archived repos and forks are listed under section 6, Noise, not with the active repos |
 | A dashboard button stops with "push refused" or "Claude doesn't have GitHub access" | The Claude app isn't installed on that owner. See [the dashboard](dashboard.md#two-github-apps-two-jobs) |
-| Alerts show as not readable | Scanning is off in that repo, or the install hasn't accepted the alert permissions |
+| Alerts show as "Turned off" or "Not set up" | The feature is off in those repos. See [Couldn't check](reading-the-report.md#couldnt-check) for how to turn each one on |
+| Alerts show as not readable | The install hasn't accepted the alert permissions, or the app lacks them |
 | The commit step fails | Branch protection on `main` blocks the Action's push. Allow `github-actions[bot]`, or turn protection off for this repo |
