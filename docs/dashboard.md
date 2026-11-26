@@ -26,6 +26,15 @@ The plugin picks the one your account supports.
 | Artifact only | claude.ai artifacts | Live page. Write buttons queue a request; `/radar-actions` in Claude Code runs the queue |
 | HTML file | Nothing extra | A local `dashboard.html`. Write buttons copy a prompt to paste into Claude Code |
 
+## How it stays fresh
+
+The daily Action writes `data/dashboard.json`. A morning scheduled task, about an hour later, checks it's valid and under 30 hours old, then gets it to the page:
+
+- **In a Claude Code project (preferred):** the task copies the file into the project's files (for example `radar/dashboard.json`). The page reads it from there when you open it, as you, through the artifact's `files` capability and `dataFile` in its `config.json`. Nothing is republished, so the run needs no tap.
+- **Elsewhere:** the task republishes the artifact with the new `data.json`. When the data names private repos, the cloud safety check asks you to approve that publish each morning.
+
+If the page can't read the project copy, it shows the copy published with it, adds "published copy" to the timestamp and says why in its tooltip. After 30 hours without new data the timestamp turns amber.
+
 ## Buttons
 
 | Kind | Buttons | What runs |
